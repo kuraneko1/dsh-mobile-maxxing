@@ -48,8 +48,10 @@ On a width of 767px or less:
 - The composer stays above the keyboard
 - Session rows keep their actions hidden until the menu or a long press
 
-The long press opens the same menu as the `...` button. Swipe right on an open drawer to
-close it; swipe left to open it.
+The long press opens the same menu as the `...` button. The drawer opens on a rightward
+swipe that starts within 96px of the left edge; a deliberate rightward drag that starts
+further in opens it too. Swipe left anywhere on the open drawer to close it. The wider start zone
+exists because Android reserves the outer ~20px of each edge for the system back gesture.
 
 ## Notifications
 

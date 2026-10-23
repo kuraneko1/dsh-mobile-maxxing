@@ -2549,16 +2549,41 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       return null;
     }
 
+    /**
+     * Nearest horizontally scrollable ancestor, or null.
+     *
+     * A wide swipe must leave such content alone: dragging right there scrolls
+     * the code block or table back, it does not ask for the drawer.
+     */
+    function horizontalScrollerAncestor(target) {
+      let node = target;
+      while (node !== null && node !== undefined && node !== document.body) {
+        if (node.nodeType === 1) {
+          const style = getComputedStyle(node);
+          if ((style.overflowX === "auto" || style.overflowX === "scroll") && node.scrollWidth > node.clientWidth + 1) return node;
+        }
+        node = node.parentElement;
+      }
+      return null;
+    }
+
     // Edge swipe from the left opens the session drawer; from the right it
     // pulls the preview/right sidebar (the app's own "Open right sidebar").
     // While the preview is open the left-to-right gesture closes it instead.
+    //
+    // The zone starts 96px in from each edge instead of at the visual edge:
+    // Android gives the outer ~20px of both edges to the system back gesture,
+    // and a swipe that starts there is cancelled (touchcancel) before the page
+    // ever sees a move. Starting inboard is what lets Android reach the page;
+    // iOS sees no difference.
+    const SWIPE_ZONE_PX = 96;
     let edgeSwipe = null;
     function onEdgeSwipeStart(event) {
       if (!narrow() || event.touches.length !== 1) return;
       if (document.querySelector("[data-rdsh-lightbox], [data-rdsh-crop-overlay], [data-shortcut-modal=settings]") !== null) return;
       const touch = event.touches[0];
       const target = event.target;
-      const fromRight = touch.clientX >= window.innerWidth - 36;
+      const fromRight = touch.clientX >= window.innerWidth - SWIPE_ZONE_PX;
       const drawerOpen = document.documentElement.getAttribute("data-rdsh-drawer") === "open";
       const panelOpen = document.documentElement.hasAttribute("data-rdsh-rightpanel-open");
       // While the preview is open, a rightward swipe anywhere on it goes back
@@ -2572,24 +2597,44 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight: false, closesPanel: true };
         return;
       }
+      if (drawerOpen) {
+        // The drawer owns the screen while it is open, so a leftward swipe
+        // closes it from anywhere: a session row, the dimmed chat behind it,
+        // the right edge. Buttons do not block it, because the gesture only
+        // claims the touch once it has actually moved sideways.
+        edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight: false, closesDrawer: true };
+        return;
+      }
+      // Past the zone the same gesture still works, it just has to be
+      // deliberate. Android never hands over a swipe that starts on the edge,
+      // so a user who pushes in from the visible edge would otherwise be left
+      // with nothing happening at all.
+      let wide = false;
       if (fromRight) {
-        // The drawer owns the screen while it is open: a swipe inside it must
-        // not pull the preview over the session list.
-        if (drawerOpen) return;
-      } else {
-        // ...and the left edge only opens the session list when nothing else
-        // has the screen.
-        if (drawerOpen) return;
-        if (touch.clientX > 36) return;
+        // The right zone pulls the preview; the drawer is closed here.
+      } else if (touch.clientX > SWIPE_ZONE_PX) {
+        // A code block or table that can scroll sideways keeps its drag.
+        if (target instanceof Element && horizontalScrollerAncestor(target) !== null) return;
+        wide = true;
+      } else if (target instanceof Element && scrolledLeftAncestor(target) !== null) {
+        // Content scrolled sideways already owns a horizontal drag.
+        return;
       }
       if (target instanceof Element && target.closest("button, a, input, textarea, [role=button], [contenteditable=true]") !== null) return;
-      edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight };
+      edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight, wide };
     }
     function onEdgeSwipeMove(event) {
       if (edgeSwipe === null || event.touches.length !== 1) return;
       const touch = event.touches[0];
       const dx = touch.clientX - edgeSwipe.x;
       const dy = touch.clientY - edgeSwipe.y;
+      if (edgeSwipe.closesDrawer === true) {
+        if (dx > -64 || Math.abs(dy) > Math.abs(dx)) return;
+        edgeSwipe = null;
+        if (event.cancelable) event.preventDefault();
+        closeDrawer();
+        return;
+      }
       if (edgeSwipe.closesPanel === true) {
         if (dx < 64 || Math.abs(dy) > Math.abs(dx)) return;
         edgeSwipe = null;
@@ -2602,6 +2647,15 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         edgeSwipe = null;
         if (event.cancelable) event.preventDefault();
         document.querySelector('[aria-label="Open right sidebar"]')?.click();
+        return;
+      }
+      if (edgeSwipe.wide === true) {
+        // Starts away from the edge, so it must be clearly horizontal before
+        // it takes the gesture away from vertical scrolling.
+        if (dx < 80 || Math.abs(dy) * 1.5 > Math.abs(dx)) return;
+        edgeSwipe = null;
+        if (event.cancelable) event.preventDefault();
+        toggleDrawer();
         return;
       }
       if (dx < 64 || Math.abs(dy) > Math.abs(dx)) return;
