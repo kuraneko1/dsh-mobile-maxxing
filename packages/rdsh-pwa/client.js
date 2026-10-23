@@ -2598,10 +2598,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         return;
       }
       if (drawerOpen) {
-        // The drawer owns the screen while it is open: a leftward swipe on it
-        // closes it, and it must not pull the preview over the session list.
-        if (fromRight) return;
-        if (target instanceof Element && target.closest("button, a, input, textarea, [role=button], [contenteditable=true]") !== null) return;
+        // The drawer owns the screen while it is open, so a leftward swipe
+        // closes it from anywhere: a session row, the dimmed chat behind it,
+        // the right edge. Buttons do not block it, because the gesture only
+        // claims the touch once it has actually moved sideways.
         edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight: false, closesDrawer: true };
         return;
       }
