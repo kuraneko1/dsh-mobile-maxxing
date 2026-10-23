@@ -1329,9 +1329,39 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       }
     }
 
+    /**
+     * The visible "Collapse right sidebar" button, or null.
+     *
+     * Hidden copies stay in the DOM on other routes: full-page routes such as
+     * Plugins and Automation tasks keep the chat's button as a 0x0 element.
+     * Matching one of those marked the whole page as an open right panel,
+     * which hid the drawer button and left no way back.
+     */
+    function visibleCollapseButton() {
+      for (const button of document.querySelectorAll('[aria-label="Collapse right sidebar"]')) {
+        const rect = button.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) return button;
+      }
+      return null;
+    }
+
+    /** Forget the right panel after it left the screen, attributes included. */
+    function forgetRightPanel() {
+      rightPanelWatch?.disconnect();
+      rightPanelIO?.disconnect();
+      rightPanelWatch = null;
+      rightPanelIO = null;
+      if (rightPanelNode !== null) rightPanelNode.removeAttribute("data-rdsh-rightpanel");
+      rightPanelNode = null;
+      document.documentElement.removeAttribute("data-rdsh-rightpanel-open");
+    }
+
     function decorateRightPanel() {
-      const collapse = document.querySelector('[aria-label="Collapse right sidebar"]');
-      if (collapse === null) return;
+      const collapse = visibleCollapseButton();
+      if (collapse === null) {
+        forgetRightPanel();
+        return;
+      }
       // The panel is the nearest ancestor that already spans the phone (the
       // fullscreen layer), not a hash-named class that changes per release.
       let node = collapse.parentElement;
@@ -2582,7 +2612,11 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         if (drawerOpen) return;
         if (touch.clientX > 36) return;
       }
-      if (target instanceof Element && target.closest("button, a, input, textarea, [role=button], [contenteditable=true]") !== null) return;
+      // Buttons and links do not block it: a tap never reaches the move
+      // threshold, and on full-page routes almost every row is a button, so
+      // excluding them left no place to start the swipe. Text fields keep
+      // their own drag.
+      if (target instanceof Element && target.closest("input, textarea, select, [contenteditable=true]") !== null) return;
       edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight };
     }
     function onEdgeSwipeMove(event) {
