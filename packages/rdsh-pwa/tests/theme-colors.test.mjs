@@ -22,6 +22,42 @@ const DARK_BY_DESIGN = [
 	{ match: /\[data-rdsh-lightbox\]/, reason: "sits on a photo" },
 	{ match: /\.rdsh-crop-/, reason: "crop UI sits on a photo" },
 	{ match: /\[data-rdsh-crop-button\]/, reason: "crop UI sits on a photo" },
+	// The drawer dim is the reference mask, fixed at rgba(0,0,0,.35). It is a
+	// scrim over the app, not text or chrome whose contrast depends on the
+	// palette.
+	{ match: /\.rdsh-mux-backdrop$/, reason: "drawer scrim is a fixed mask" },
+	// Variant B's ring and idle open-row paint is the reference implementation
+	// verbatim: the brief is an exact reproduction of DSH-PWA mobile-ux before
+	// any theme adaptation, so this one block keeps the original hex/rgba
+	// values instead of tokens. The exception is limited to those rows; the
+	// reference colours themselves are asserted below.
+	{ match: /\[data-rdsh-anim="outline"\] \[data-rdsh-(?:ring|open)-row\]/, reason: "reference Variant B ring/open row paint" },
+];
+
+/**
+ * Every colour the reference Variant B block paints (DSH-PWA
+ * mobile-ux/client.js): the ring fill in its idle/selected/hover states, both
+ * conic gradients, and the idle open row and its hover. Asserting them here
+ * pins the reproduction: swapping one back to a light theme token is a test
+ * failure even though the block is exempt from the raw-colour scan.
+ */
+const REFERENCE_OUTLINE_PAINT = [
+	"--rdsh-ring-fill: #1b1b1c;",
+	"--rdsh-ring-fill: #2d2d2e;",
+	"--rdsh-ring-fill: #242425;",
+	"rgba(122,170,255,0) 0deg",
+	"rgba(122,170,255,.14) 235deg",
+	"rgba(140,185,255,.68) 268deg",
+	"#cfe0ff 292deg",
+	"rgba(122,170,255,.3) 315deg",
+	"rgba(255,209,102,0) 0deg",
+	"rgba(255,209,102,.14) 235deg",
+	"rgba(255,224,130,.68) 268deg",
+	"#fff3c4 292deg",
+	"rgba(255,209,102,.3) 315deg",
+	"background: #232324 !important;",
+	"box-shadow: inset 0 0 0 1px rgba(255,255,255,.2) !important;",
+	"background: #29292b !important;",
 ];
 
 /** Properties that must name a token, not a literal. */
@@ -139,6 +175,14 @@ function violations() {
 test("no shared stylesheet paints a raw colour", () => {
 	const bad = violations();
 	assert.deepEqual(bad, [], `raw colours in a theme-aware stylesheet:\n${bad.join("\n")}`);
+	// The one exemption must still reproduce the reference exactly.
+	const start = CLIENT.indexOf('html[data-rdsh-anim="outline"] [data-rdsh-ring-row] {');
+	const end = CLIENT.indexOf("/* The open session's title carries its running state", start);
+	assert.ok(start !== -1 && end > start, "Variant B ring block is present");
+	const outline = CLIENT.slice(start, end);
+	for (const literal of REFERENCE_OUTLINE_PAINT) {
+		assert.ok(outline.includes(literal), `Variant B block lost a reference colour: ${literal}`);
+	}
 });
 
 test("the detector catches a literal it should", () => {

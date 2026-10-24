@@ -58,28 +58,30 @@ reach the PC**. The shared theme stays in Settings → General → Appearance.
   cannot be per-device; set `themeColor` / `backgroundColor` to `#fff` in the profile patch
   if you run light-only.
 - One meta cannot switch the status bar between black and white glyphs, so the default is
-  now `default` (dark text). A dark-only profile can set
-  `appleStatusBarStyle: "black-translucent"`.
+  `black-translucent` again (white glyphs over a dark background), matching the previous
+  layout. Set `appleStatusBarStyle: "default"` for dark glyphs on a light palette.
+
+### Language
+
+`lang` defaults to `ja`. The host injects the normalized value into the index as
+`globalThis.__RDSH_PWA_LANG__`; this package's browser half prefers it over
+`document.lang` (the shell's `document.lang` is never rewritten). The manifest, the
+service-worker offline page and the notification text follow the same value
+(`notifications.lang` overrides it for notifications alone). `lang: "en"` makes the
+browser half, the service worker, the manifest and notifications all English;
+untranslated dictionary keys fall back to English.
 
 ## Phone layout
 
-On a phone, that is:
+A "phone" is simply a window at most 767px wide, as in the previous layout. A landscape
+phone wider than that is treated as a desktop. A narrow desktop window at 767px or less
+gets the same treatment as a phone: the stock controls are hidden, labels are rewritten
+and "+" becomes the file picker. Whether the pointer is a mouse or a finger is not part
+of the test.
 
-- a width of 767px or less, or
-- a landscape phone: `(orientation: landscape)`, width up to 1023px, height up to
-  500px, and a coarse (touch) primary pointer
-
-The landscape clause exists because a phone held sideways reports 844x390 or
-852x393, which used to fall into the desktop layout (no drawer button, no swipe).
-A narrow desktop window is unaffected: a mouse reports `pointer: fine`.
-
-The layout is the only thing width decides. **Hiding the app's own controls,
-rewriting their labels, or replacing "+" with the file picker** asks what the
-device is instead (`phone()`): a coarse primary pointer, or an installed app
-(a coarse primary pointer, or a coarse pointer in a narrow window). Width alone
-never counts, so a narrow desktop window keeps the stock UI.
-A narrow desktop window keeps every control, the stock account menu and the
-stock "+" command list.
+The layout (sidebar becomes a drawer) uses the same width test. This release keeps the
+previous width test; device-specific changes are a separate change, not part of this
+parity fix.
 
 What changes:
 
@@ -186,7 +188,23 @@ wrap touches nothing else and is removed on dispose).
 | `react` / `react-dom/client` / `@deepseek-ai/dsh-client-ui-primitives` | provided by DSH | All shipped with DSH; nothing to install |
 
 The browser half reads only its own globals (`__RDSH_PWA__`, `__RDSH_PWA_SETTINGS_SECTION__`,
-`__RDSH_MOBILE_UX__`), each behind a `typeof` check.
+`__RDSH_MOBILE_UX__`, `__RDSH_PWA_LANG__`), each behind a `typeof` check.
+
+## Migrating from the split plugins
+
+When moving from the old `rdsh-pwa` + `rdsh-mobile-ux` pair, translate the profile patch
+as follows. **This package never edits the profile.**
+
+- Move `rdsh-mobile-ux`'s `runningAnimation` / `hideLabels` / `showHiddenControls` to
+  `rdsh-pwa.mobileUx.*`
+- Remove the plugins this package replaces from the profile: `rdsh-mobile-ux`,
+  `rdsh-markdown-cjk`, `rdsh-session-id-copy`, `dsh-notify-push`. Also remove
+  `rdsh-mobile-ui` (layout) and `@local/dsh-sound` (sounds) if present, or the layout and
+  the notification sound are controlled twice
+- Keep one `rdsh-pwa` entry. Put `lang` (default `ja`) and `appleStatusBarStyle` in its
+  config
+
+Leaving the duplicates installed duplicates routes, slots and notifications.
 
 ## Verification
 

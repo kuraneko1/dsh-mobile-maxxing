@@ -60,9 +60,18 @@ PC と共通のテーマは 設定 → 一般 → 外観 です。
 - インストール済みアプリのスプラッシュとタスク切替の色は manifest の `themeColor` 固定で、
   端末別にはなりません。ライト固定で使うなら profile patch で `themeColor` /
   `backgroundColor` を `#fff` にしてください。
-- ステータスバーの文字色は1つの meta では切り替えられないため、既定を `default`（黒文字）に
-  しました。ダーク固定なら profile patch で `appleStatusBarStyle: "black-translucent"` を
-  指定してください。
+- ステータスバーの文字色は1つの meta では切り替えられないため、既定は旧構成と同じ
+  `black-translucent`（暗い背景に白文字）です。ライト固定で黒文字にするときは profile patch で
+  `appleStatusBarStyle: "default"` を指定してください。
+
+### 言語
+
+`lang` の既定は `ja` です。ホストは正規化した値を index の
+`globalThis.__RDSH_PWA_LANG__` に注入し、このパッケージのブラウザ側は `document.lang` より
+これを優先します（シェルの `document.lang` は書き換えません）。manifest・サービスワーカーの
+オフライン表示・通知文面も同じ値に従います（通知だけ変えたいときは `notifications.lang` を
+明示してください）。`lang: "en"` を指定すると、ブラウザ側・SW・manifest・通知がすべて英語に
+なります。辞書に未訳のキーがある場合は英語にフォールバックします。
 
 ## スマホ向けUX
 
@@ -70,23 +79,13 @@ PC と共通のテーマは 設定 → 一般 → 外観 です。
 Settings をスマホ幅に積み、タップと長押しを分け、通知設定と「スマホでは使えない操作」の非表示
 リストを提供します。追加インストールは不要です。
 
-「スマホ」の判定は幅だけではありません。次のいずれかです。
+「スマホ」の判定は**幅だけ**です。幅 767px 以下をスマホとして扱います（旧構成と同じ）。
+横向きのスマホでも幅が 768px 以上なら PC 扱いです。狭いデスクトップ窓も幅が 767px 以下なら
+同じ扱いになり、DSH 本体の操作の非表示・ラベルの書き換え・「＋」の差し替えの対象になります。
+マウスかタッチか（ポインタの種類）では判定しません。
 
-- 幅 767px 以下
-- 横向きのスマホ（`(orientation: landscape)` かつ幅 1023px 以下・高さ 500px 以下・主ポインタが粗い）
-
-横向きを足したのは、スマホを横にすると 844×390 や 852×393 になり、幅だけの判定では PC 扱いに
-落ちてドロワーボタンもスワイプも消えていたためです。狭いデスクトップ窓は `pointer: fine` なので
-影響を受けません（Enter の扱いも幅ではなくポインタで決めています）。
-
-一方、**DSH 本体の操作を隠す・ラベルを変える・「＋」を差し替える**といった判断は、幅ではなく
-端末で行います（`phone()`）。条件は次のどちらかです。
-
-- 主ポインタが粗い（`(pointer: coarse)`）
-- 指が主な入力（`(pointer: coarse)`）、または狭い画面で粗いポインタがある場合。幅だけでは判定しません
-
-狭いデスクトップ窓では何も隠さず、アカウントメニューも「＋」のコマンド一覧もそのままです。
-レイアウト（サイドバー→ドロワー）だけは従来どおり幅で決まります。
+レイアウト（サイドバー→ドロワー）も同じ幅で決まります。今回は旧構成と同じ幅 767px 以下を
+選びました。端末判定などの変更は、今回の再現とは別の変更として扱います。
 
 実行中セッションのラベルの動きは `mobileUx.runningAnimation` で選べます（`aurora` /
 `breathing` / `outline` / `none`、既定は `outline`）。3案のモックアップはリポジトリの
@@ -178,7 +177,22 @@ rdsh-mobile-ui / rdsh-answer-guard など）は不要で、素の DSH にその�
 | `react` / `react-dom/client` / `@deepseek-ai/dsh-client-ui-primitives` | DSH が提供 | いずれも DSH 本体に同梱。外部 npm パッケージのインストールは不要です |
 
 クライアント側が読むグローバルは自分自身のもの（`__RDSH_PWA__` / `__RDSH_PWA_SETTINGS_SECTION__` /
-`__RDSH_MOBILE_UX__`）だけで、いずれも `typeof` で存在確認してから使います。
+`__RDSH_MOBILE_UX__` / `__RDSH_PWA_LANG__`）だけで、いずれも `typeof` で存在確認してから使います。
+
+## 旧構成からの移行
+
+以前の `rdsh-pwa` + `rdsh-mobile-ux` の2プラグイン構成から移る場合の読み替えです。
+**このパッケージは profile を書き換えません。**
+
+- `rdsh-mobile-ux` の `runningAnimation` / `hideLabels` / `showHiddenControls` は
+  `rdsh-pwa` の `mobileUx.*` へ移す
+- 統合版と重なる `rdsh-mobile-ux` / `rdsh-markdown-cjk` / `rdsh-session-id-copy` /
+  `dsh-notify-push` を profile から外す。レイアウト用の `rdsh-mobile-ui` と通知音の
+  `@local/dsh-sound` も、残すと二重制御・二重再生になるため外す
+- `rdsh-pwa` は1つだけにする。`lang`（既定 `ja`）と `appleStatusBarStyle` は
+  `rdsh-pwa` の config に置く
+
+重複したままにすると、ルート・スロット・通知が二重になります。
 
 ## 検証
 
@@ -237,7 +251,7 @@ iOS 26 のホーム画面 PWA は、`apple-mobile-web-app-capable` などの App
 レガシーな view frame を使い、WebView をステータスバー分だけ短く作って下に未描画の帯を残す
 （[WebKit 301994](https://bugs.webkit.org/show_bug.cgi?id=301994)）。この帯は DOM の外なので
 CSS では消せない。この構成（manifest + `mobile-web-app-capable` +
-`appleStatusBarStyle`（既定は `default`）+ `apple-touch-icon`、Apple の capable/title なし）に合わせて、
+`appleStatusBarStyle`（既定は `black-translucent`）+ `apple-touch-icon`、Apple の capable/title なし）に合わせて、
 DSH も Apple 専用メタを外している。それでも残る場合の確認用に、PWA マークアップを外した
 以前は確認用に `/launch` というルートを同梱していたが、認証の無い診断用ページを
 出荷物に残さない方針にして削除した。

@@ -9,10 +9,12 @@
 import assert from "node:assert/strict";
 import { createDecipheriv, createECDH, hkdfSync, randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync } from "node:fs";
+import { Readable } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
+	applyNotify,
 	buildQuestionPayload,
 	buildTurnEndPayload,
 	encryptPushPayload,
@@ -25,6 +27,7 @@ import {
 	toBase64Url,
 	vapidAuthorization,
 } from "../notify/host.js";
+import { copyFor } from "../lib/copy.js";
 
 test("base64url round-trips and drops padding", () => {
 	const bytes = randomBytes(37);
@@ -47,14 +50,14 @@ test("copy config merges over the defaults by type", () => {
 });
 
 test("turn-end and question payloads carry the session id", () => {
-	const turn = buildTurnEndPayload("session-1", { kind: "completed" }, { session: "テスト" });
+	const turn = buildTurnEndPayload("session-1", { kind: "completed" }, { session: "テスト", lang: "en" });
 	assert.equal(turn.sessionId, "session-1");
 	assert.equal(turn.title, "テスト", "the session name is the headline");
 	assert.match(turn.url, /session=session-1/);
 
 	const question = buildQuestionPayload(
 		{ agent: { id: "session-2" }, questions: [{ header: "確認", question: "進めますか？" }] },
-		{ session: "別の名前" },
+		{ session: "別の名前", lang: "en" },
 	);
 	assert.equal(question.sessionId, "session-2");
 	assert.equal(question.title, "別の名前");
@@ -62,20 +65,22 @@ test("turn-end and question payloads carry the session id", () => {
 });
 
 test("an unnamed session falls back to the app prefix", () => {
-	const payload = buildTurnEndPayload("s", { kind: "completed" }, { session: "" });
+	const payload = buildTurnEndPayload("s", { kind: "completed" }, { session: "", lang: "en" });
 	assert.equal(payload.title, "DSH: Work finished");
 });
 
 test("payload copy follows the configured language", () => {
-	// `ja` is an empty pack today, so a ja payload must fall back to English
-	// rather than leak a key. The status vocabulary itself is exercised too.
-	const english = buildTurnEndPayload("s", { kind: "aborted" }, { session: "" });
+	// English stays available explicitly. Japanese uses COPY.ja per key and
+	// falls back to English for keys that have not been translated yet.
+	const english = buildTurnEndPayload("s", { kind: "aborted" }, { session: "", lang: "en" });
 	assert.equal(english.title, "DSH: Stopped (interrupted)");
 	assert.equal(english.body, "End reason: aborted");
+	const japaneseStrings = copyFor("ja");
 	const japanese = buildTurnEndPayload("s", { kind: "completed" }, { session: "", lang: "ja" });
-	assert.equal(japanese.title, "DSH: Work finished", "an empty pack falls back to English");
+	assert.equal(japanese.title, `DSH: ${japaneseStrings["notify.turn.completed"]}`);
+	assert.equal(japanese.body, japaneseStrings["notify.turn.detailCompleted"]);
 
-	const question = buildQuestionPayload({ agent: { id: "q" }, questions: [{ question: "Proceed?" }] });
+	const question = buildQuestionPayload({ agent: { id: "q" }, questions: [{ question: "Proceed?" }] }, { lang: "en" });
 	assert.equal(question.title, "DSH: Confirm", "the default question header is English");
 });
 
@@ -203,6 +208,214 @@ test("push endpoints must be real https push services", () => {
 	assert.equal(store.subscriptions().length, 0, "nothing was stored");
 	// A real push service is accepted.
 	assert.equal(store.add({ endpoint: "https://web.push.apple.com/abc", keys }, { origin: "https://app.example" }), 1);
+});
+
+test("a phone send marks the next turn; a desktop send does not", async () => {
+	const home = mkdtempSync(join(tmpdir(), "rdsh-fromphone-"));
+	const file = join(home, "rdsh-pwa", "push.json");
+	mkdirSync(join(home, "rdsh-pwa"), { recursive: true });
+	const makeKeys = () => {
+		const ecdh = createECDH("prime256v1");
+		ecdh.generateKeys();
+		return { p256dh: toBase64Url(ecdh.getPublicKey()), auth: toBase64Url(randomBytes(16)) };
+	};
+	const store = new PushStore(file);
+	store.add({ endpoint: "https://web.push.apple.com/phone", keys: makeKeys() }, { origin: "https://app.example:8446" });
+	store.add({ endpoint: "https://web.push.apple.com/old", keys: makeKeys() }, { origin: "https://app.example:8444" });
+
+	const previousHome = process.env.DSH_HOME;
+	const previousFetch = globalThis.fetch;
+	process.env.DSH_HOME = home;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		return { status: 201, ok: true };
+	};
+	try {
+		const listeners = new Map();
+		const agent = { id: "s1" };
+		const agents = { get: (id) => (id === "s1" ? agent : undefined), roots: () => [agent] };
+		const routes = new Map();
+		const services = {
+			agents,
+			connection: { requestRejection: () => undefined },
+			webServer: {
+				register(route) { routes.set(route.path, route); return () => routes.delete(route.path); },
+				tapIndex() { return () => {}; },
+				getOrigin: () => "https://app.example:8446",
+			},
+		};
+		const scope = {
+			...services,
+			get: (name) => services[name],
+			on(event, handler) { listeners.set(event, handler); return () => listeners.delete(event); },
+			effect(fn) { const dispose = fn(); return typeof dispose === "function" ? dispose : () => {}; },
+		};
+		const ctx = {
+			inject(deps, callback) { return callback(scope); },
+			get: (name) => services[name],
+			on(event, handler) { listeners.set(event, handler); return () => {}; },
+			effect(fn) { return scope.effect(fn); },
+		};
+		applyNotify(ctx, { onlyMobileTurns: true });
+		const mobileSend = routes.get("/api/rdsh-pwa/push/mobile-send");
+		const post = async (path, body) => {
+			const req = Readable.from([Buffer.from(JSON.stringify(body))]);
+			req.method = "POST";
+			req.url = path;
+			req.headers = { origin: "https://app.example:8446" };
+			let status = 0;
+			await routes.get(path).handler(req, { writeHead(code) { status = code; }, end() {} });
+			return status;
+		};
+		const wait = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+		assert.equal(await post("/api/rdsh-pwa/push/mobile-send", { sessionId: "s1" }), 200);
+		listeners.get("session/event")({ id: "s1" }, { type: "turn/start" });
+		listeners.get("session/event")({ id: "s1" }, { type: "turn/end", data: { reason: { kind: "completed" } } });
+		await wait();
+		assert.deepEqual(calls, ["https://web.push.apple.com/phone"], "only the origin that sent the turn is pushed");
+
+		calls.length = 0;
+		listeners.get("session/event")({ id: "s2" }, { type: "turn/start" });
+		listeners.get("session/event")({ id: "s2" }, { type: "turn/end", data: { reason: { kind: "completed" } } });
+		await wait();
+		assert.deepEqual(calls, [], "a desktop turn is not pushed when onlyMobileTurns is true");
+	} finally {
+		globalThis.fetch = previousFetch;
+		if (previousHome === undefined) delete process.env.DSH_HOME;
+		else process.env.DSH_HOME = previousHome;
+	}
+});
+
+test("notification fan-out targets the app that started the turn or request", async () => {
+	const home = mkdtempSync(join(tmpdir(), "rdsh-targeting-"));
+	const file = join(home, "rdsh-pwa", "push.json");
+	mkdirSync(join(home, "rdsh-pwa"), { recursive: true });
+	const makeKeys = () => {
+		const ecdh = createECDH("prime256v1");
+		ecdh.generateKeys();
+		return { p256dh: toBase64Url(ecdh.getPublicKey()), auth: toBase64Url(randomBytes(16)) };
+	};
+	const store = new PushStore(file);
+	store.add({ endpoint: "https://web.push.apple.com/phone", keys: makeKeys() }, { origin: "https://app.example:8446" });
+	store.add({ endpoint: "https://web.push.apple.com/old", keys: makeKeys() }, { origin: "https://app.example:8444" });
+
+	const previousHome = process.env.DSH_HOME;
+	const previousFetch = globalThis.fetch;
+	process.env.DSH_HOME = home;
+	const calls = [];
+	globalThis.fetch = async (url) => {
+		calls.push(String(url));
+		return { status: 201, ok: true };
+	};
+	const wait = () => new Promise((resolve) => setTimeout(resolve, 20));
+	const harness = (getOrigin) => {
+		const listeners = new Map();
+		const routes = new Map();
+		const agent = { id: "s1" };
+		const agents = { get: (id) => (id === "s1" ? agent : undefined), roots: () => [agent] };
+		const services = {
+			agents,
+			connection: { requestRejection: () => undefined },
+			webServer: {
+				register(route) { routes.set(route.path, route); return () => routes.delete(route.path); },
+				tapIndex() { return () => {}; },
+				getOrigin: () => getOrigin,
+			},
+		};
+		const scope = {
+			...services,
+			get: (name) => services[name],
+			on(event, handler) { listeners.set(event, handler); return () => listeners.delete(event); },
+			effect(fn) { const dispose = fn(); return typeof dispose === "function" ? dispose : () => {}; },
+		};
+		const ctx = {
+			inject(deps, callback) { return callback(scope); },
+			get: (name) => services[name],
+			on(event, handler) { listeners.set(event, handler); return () => {}; },
+			effect(fn) { return scope.effect(fn); },
+		};
+		applyNotify(ctx, { onlyMobileTurns: true });
+		return { routes, listeners };
+	};
+	const request = async (target, path, { method = "POST", body = undefined, origin = undefined } = {}) => {
+		const text = body === undefined ? "" : JSON.stringify(body);
+		const req = Readable.from(text === "" ? [] : [Buffer.from(text)]);
+		req.method = method;
+		req.url = path;
+		req.headers = origin === undefined ? {} : { origin };
+		let status = 0;
+		await target.routes.get(path).handler(req, { writeHead(code) { status = code; }, end() {} });
+		return status;
+	};
+	const turn = (target, id, type) => target.listeners.get("session/event")({ id }, { type, data: { reason: { kind: "completed" } } });
+	const question = (target) => target.listeners.get("user-questions/request")({ agent: { id: "s1", session: { id: "s1" } }, questions: [{ header: "Q", question: "Continue?" }] }, () => {});
+
+	try {
+		// No request-derived origin: /test without an Origin header keeps the
+		// historical all-subscriptions fallback.
+		const legacy = harness("http://127.0.0.1:3207");
+		assert.equal(await request(legacy, "/api/rdsh-pwa/push/test", { body: {} }), 200);
+		await wait();
+		assert.deepEqual(calls.sort(), ["https://web.push.apple.com/old", "https://web.push.apple.com/phone"].sort());
+		calls.length = 0;
+
+		// An origin-less mobile-send keeps the legacy fallback as well.
+		assert.equal(await request(legacy, "/api/rdsh-pwa/push/mobile-send", { body: { sessionId: "s1" } }), 200);
+		turn(legacy, "s1", "turn/start");
+		turn(legacy, "s1", "turn/end");
+		await wait();
+		assert.equal(calls.length, 2, "an origin-less mobile-send no longer falls back");
+
+		// /test with an explicit origin sends only to that app.
+		calls.length = 0;
+		assert.equal(await request(legacy, "/api/rdsh-pwa/push/test", { body: {}, origin: "https://app.example:8446" }), 200);
+		await wait();
+		assert.deepEqual(calls, ["https://web.push.apple.com/phone"]);
+
+		// mobile-send with the page origin pins turn/end to that app.
+		calls.length = 0;
+		assert.equal(await request(legacy, "/api/rdsh-pwa/push/mobile-send", { body: { sessionId: "s1", origin: "https://app.example:8446" } }), 200);
+		turn(legacy, "s1", "turn/start");
+		turn(legacy, "s1", "turn/end");
+		await wait();
+		assert.deepEqual(calls, ["https://web.push.apple.com/phone"]);
+
+		// webServer.getOrigin() matching a stored subscription seeds ownOrigins.
+		calls.length = 0;
+		const seeded = harness("https://app.example:8446");
+		question(seeded);
+		await wait();
+		assert.deepEqual(calls, ["https://web.push.apple.com/phone"], "a matching server origin was not adopted");
+
+		// A non-matching internal origin is not adopted.
+		calls.length = 0;
+		const internal = harness("http://127.0.0.1:3207");
+		question(internal);
+		await wait();
+		assert.equal(calls.length, 2, "an internal origin was incorrectly adopted");
+
+		// Question fallback: ownOrigins when no turn origin is known.
+		calls.length = 0;
+		const own = harness("http://127.0.0.1:3207");
+		assert.equal(await request(own, "/api/rdsh-pwa/push/vapid", { method: "GET", origin: "https://app.example:8444" }), 200);
+		question(own);
+		await wait();
+		assert.deepEqual(calls, ["https://web.push.apple.com/old"]);
+
+		// Question priority: the turn's origin wins over ownOrigins.
+		calls.length = 0;
+		assert.equal(await request(own, "/api/rdsh-pwa/push/mobile-send", { body: { sessionId: "s1", origin: "https://app.example:8446" } }), 200);
+		turn(own, "s1", "turn/start");
+		question(own);
+		await wait();
+		assert.deepEqual(calls, ["https://web.push.apple.com/phone"], "the turn origin did not win over ownOrigins");
+	} finally {
+		globalThis.fetch = previousFetch;
+		if (previousHome === undefined) delete process.env.DSH_HOME;
+		else process.env.DSH_HOME = previousHome;
+	}
 });
 
 test("a broken push store does not stop the PWA routes", async () => {

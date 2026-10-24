@@ -33,8 +33,19 @@ export const name = "rdsh-pwa";
 /** HTTP routes need `webServer`; mount lazily so headless profiles stay clean. */
 export const inject = [];
 
-/** Marker proving the index already carries our metadata block. */
+/**
+ * Marker proving the index already carries our metadata block.
+ *
+ * Deliberately unchanged from the split-plugin version: old and new taps must
+ * recognise each other's output, so a version bump here would make each tap
+ * add a second set of PWA meta tags to the same response.
+ */
 const INDEX_MARKER = "<!--rdsh-pwa-->";
+
+/** The browser half reads these globals; presence is what "payload injected" means. */
+const COPY_ASSIGNMENT = /(?:globalThis|self|window)\.__RDSH_PWA_COPY__\s*=/;
+const PROBES_ASSIGNMENT = /(?:globalThis|self|window)\.__RDSH_PWA_PROBES__\s*=/;
+const LANG_ASSIGNMENT = /(?:globalThis|self|window)\.__RDSH_PWA_LANG__\s*=/;
 
 /** Manifest and viewport limits we normalize before serving. */
 const DISPLAY_MODES = new Set(["standalone", "minimal-ui", "fullscreen", "browser", "window-controls-overlay"]);
@@ -46,15 +57,17 @@ const DISPLAY_MODES = new Set(["standalone", "minimal-ui", "fullscreen", "browse
 export const DEFAULTS = {
 	name: "DeepSeek Harness",
 	shortName: "DSH",
-	description: COPY.en["manifest.description"],
-	lang: "en",
+	// Kept for callers that read DEFAULTS directly; normalizeConfig picks the
+	// description from lib/copy.js for the effective `lang`, so an en profile
+	// still serves the en string.
+	description: "DeepSeek Harness をアプリのように起動します。",
+	lang: "ja",
 	display: "standalone",
 	themeColor: "#151517",
 	backgroundColor: "#151517",
-	// One meta cannot switch between black and white glyphs: `default` draws
-	// dark text, which stays readable on the light palette, and a dark-only
-	// profile can still ask for `black-translucent` in its patch.
-	appleStatusBarStyle: "default",
+	// Restores the split-plugin default. `default` (dark glyphs) is still
+	// available for a light-only profile.
+	appleStatusBarStyle: "black-translucent",
 	enableServiceWorker: true,
 	navigationTimeoutMs: 1500,
 };
@@ -206,8 +219,45 @@ function withViewport(html) {
 }
 
 /**
+ * The inline payload the browser half needs, containing only the globals the
+ * document does not already define.
+ *
+ * `lang` is normalized before it reaches this function, so it can only be a
+ * key of the copy table; `scriptJson` still escapes `<` so a future locale id
+ * can never terminate the script tag.
+ *
+ * @param {object} parts - which globals are missing.
+ * @param {boolean} parts.copy - include `__RDSH_PWA_COPY__`.
+ * @param {boolean} parts.probes - include `__RDSH_PWA_PROBES__`.
+ * @param {string} [parts.lang] - include `__RDSH_PWA_LANG__` with this value.
+ * @returns {string} a script tag, or "" when nothing is missing.
+ */
+function payloadScript({ copy, probes, lang }) {
+	const assignments = [];
+	if (copy) assignments.push(`globalThis.__RDSH_PWA_COPY__=${scriptJson(COPY)}`);
+	if (probes) assignments.push(`globalThis.__RDSH_PWA_PROBES__=${scriptJson(PROBES)}`);
+	if (typeof lang === "string" && lang !== "") assignments.push(`globalThis.__RDSH_PWA_LANG__=${scriptJson(lang)}`);
+	return assignments.length === 0 ? "" : `<script>${assignments.join(";")}<\/script>`;
+}
+
+/** Insert a fragment at the top of `<head>`, or at the top of the document. */
+function insertInHead(html, fragment) {
+	const open = /<head(?:\s[^>]*)?>/i.exec(html);
+	if (open !== null) return `${html.slice(0, open.index + open[0].length)}${fragment}${html.slice(open.index + open[0].length)}`;
+	return `${fragment}${html}`;
+}
+
+/**
  * Add the metadata a home-screen launch needs. Pure and idempotent: the
  * returned HTML carries {@link INDEX_MARKER} exactly once.
+ *
+ * A document that already has the marker may come from the split-plugin tap,
+ * which did not inject `__RDSH_PWA_COPY__` / `__RDSH_PWA_PROBES__` /
+ * `__RDSH_PWA_LANG__`. In that case only the missing payload is added:
+ * re-running the whole decoration would duplicate the PWA meta tags in the
+ * same response. The browser half prefers this normalized language over the
+ * shell's `document.lang`, so the plugin UI follows the profile without
+ * rewriting the shell document.
  *
  * @param {string} html - the index document the Web server rendered.
  * @param {object} [config] - profile config for this plugin.
@@ -215,14 +265,19 @@ function withViewport(html) {
  */
 export function decorateIndex(html, config) {
 	if (typeof html !== "string" || html === "") return html;
-	if (html.includes(INDEX_MARKER)) return html;
 	const cfg = normalizeConfig(config);
+	const payload = payloadScript({
+		copy: !COPY_ASSIGNMENT.test(html),
+		probes: !PROBES_ASSIGNMENT.test(html),
+		lang: LANG_ASSIGNMENT.test(html) ? undefined : cfg.lang,
+	});
+	if (html.includes(INDEX_MARKER)) return payload === "" ? html : insertInHead(html, payload);
 	const head = [
 		INDEX_MARKER,
 		// The browser half reads its strings from here; nothing else in the
 		// client carries UI copy. PROBES are upstream label vocabularies, not
 		// copy, so they travel separately.
-		`<script>globalThis.__RDSH_PWA_COPY__=${scriptJson(COPY)};globalThis.__RDSH_PWA_PROBES__=${scriptJson(PROBES)}<\/script>`,
+		payload,
 		// The standard set of "this is a capable app" meta tags, plus
 		// the install manifest, but NOT apple-mobile-web-app-capable/title.
 		// iOS 26 uses a mis-sized legacy frame when the Apple-specific capable
@@ -233,10 +288,7 @@ export function decorateIndex(html, config) {
 		'<meta name="format-detection" content="telephone=no">',
 		'<link rel="apple-touch-icon" href="pwa/apple-touch-icon.png">',
 	].join("");
-	const out = withViewport(html);
-	const open = /<head(?:\s[^>]*)?>/i.exec(out);
-	if (open !== null) return `${out.slice(0, open.index + open[0].length)}${head}${out.slice(open.index + open[0].length)}`;
-	return `${head}${out}`;
+	return insertInHead(withViewport(html), head);
 }
 
 function respond(res, method, status, headers, body) {
@@ -292,7 +344,11 @@ export function apply(ctx, config) {
 	// fan-out and the browser-facing routes all live there. It opens a state
 	// file, so it is mounted under the same guard as the rest: an unwritable
 	// home must not take the PWA routes down with it.
-	mountPart("rdsh-pwa/notify", [], applyNotify, normalizeNotifyConfig(config?.notifications));
+	// The package-wide `lang` is the default for notification copy too; an
+	// explicit `notifications.lang` in the profile patch still wins.
+	const notifyConfig = normalizeNotifyConfig(config?.notifications);
+	if (typeof config?.notifications?.lang !== "string") notifyConfig.lang = cfg.lang;
+	mountPart("rdsh-pwa/notify", [], applyNotify, notifyConfig);
 	// mobile-ux and markdown-cjk inject what they need inside their own apply.
 	mountPart("rdsh-mobile-ux", [], applyMobileUx, config?.mobileUx);
 	mountPart("rdsh-markdown-cjk", [], applyMarkdownCjk, config?.markdownCjk);

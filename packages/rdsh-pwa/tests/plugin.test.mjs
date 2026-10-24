@@ -6,9 +6,12 @@
  */
 
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import { runInNewContext } from "node:vm";
 import { apply, buildManifest, decorateIndex, normalizeConfig } from "../index.js";
-import { COPY } from "../lib/copy.js";
+import { buildTurnEndPayload } from "../notify/host.js";
+import { COPY, PROBES, copyFor } from "../lib/copy.js";
 
 /**
  * A context good enough to mount the plugin.
@@ -105,6 +108,17 @@ async function call(route, method = "GET", url = route.path) {
 
 const INDEX = `<!doctype html><html lang="en"><head><base href="./"><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>DeepSeek Harness</title></head><body><div id="root"></div></body></html>`;
 
+/** The `globalThis.__RDSH_PWA_*__` values from the injected payload script. */
+function injectedPayload(html) {
+	const script = /<script>(globalThis\.__RDSH_PWA_[A-Z_]+__=[\s\S]*?)<\/script>/.exec(html);
+	assert.ok(script !== null, "the payload script exists");
+	const values = {};
+	for (const match of script[1].matchAll(/globalThis\.(__RDSH_PWA_[A-Z_]+__)=([\s\S]*?)(?=;globalThis\.__RDSH_PWA_|$)/g)) {
+		values[match[1]] = JSON.parse(match[2].replaceAll("\\u003c", "<"));
+	}
+	return values;
+}
+
 test("manifest carries the installability fields Chrome requires", () => {
 	const manifest = buildManifest({});
 	assert.equal(manifest.display, "standalone");
@@ -146,40 +160,116 @@ test("index decoration adds iOS metadata and an edge-to-edge viewport", () => {
 		"the Apple-only capable meta would force the iOS 26 legacy frame");
 	assert.ok(html.includes('rel="apple-touch-icon"'));
 	assert.ok(html.includes('name="format-detection" content="telephone=no"'));
+	assert.ok(html.includes('name="apple-mobile-web-app-status-bar-style" content="black-translucent"'),
+		"the split-plugin status bar default is restored");
 	assert.ok(html.includes("viewport-fit=cover"));
 	assert.ok(html.includes("interactive-widget=resizes-content"));
 	assert.ok(html.includes("width=device-width"));
 	assert.ok(html.includes("initial-scale=1"), "existing viewport parts survive");
+	// A light-only profile can still ask for dark glyphs.
+	const light = decorateIndex(INDEX, { appleStatusBarStyle: "default" });
+	assert.ok(light.includes('name="apple-mobile-web-app-status-bar-style" content="default"'));
 });
 
-test("manifest copy follows the dictionary, not the old hard-coded Japanese", () => {
-	const manifest = buildManifest({});
-	assert.equal(manifest.lang, "en", "the document is served in en");
-	assert.equal(manifest.description, COPY.en["manifest.description"]);
-	assert.deepEqual(manifest.screenshots.map((shot) => shot.label), [
+test("manifest copy follows the dictionary for the configured language", () => {
+	// The package-wide default is Japanese again. Until COPY.ja has the key,
+	// copyFor() falls back to English per key; assert the dictionary result so
+	// this stays true when the Japanese pack lands.
+	const japanese = buildManifest({});
+	assert.equal(japanese.lang, "ja", "the default language is ja again");
+	assert.equal(japanese.description, copyFor("ja")["manifest.description"]);
+	assert.deepEqual(japanese.screenshots.map((shot) => shot.label), [
+		copyFor("ja")["manifest.screenshot.chat"],
+		copyFor("ja")["manifest.screenshot.desktop"],
+	]);
+
+	// An explicit en profile keeps the existing English strings.
+	const english = buildManifest({ lang: "en" });
+	assert.equal(english.lang, "en", "en remains available");
+	assert.equal(english.description, COPY.en["manifest.description"]);
+	assert.deepEqual(english.screenshots.map((shot) => shot.label), [
 		COPY.en["manifest.screenshot.chat"],
 		COPY.en["manifest.screenshot.desktop"],
 	]);
-	// ja exists as a pack slot but has no strings yet, so it falls back to en.
-	const japanese = buildManifest({ lang: "ja" });
-	assert.equal(japanese.lang, "ja");
-	assert.equal(japanese.description, COPY.en["manifest.description"]);
+	// A filled ja pack wins for its own keys; an empty one falls back to en.
+	const jaDescription = COPY.ja["manifest.description"];
+	assert.equal(
+		japanese.description,
+		typeof jaDescription === "string" && jaDescription !== "" ? jaDescription : COPY.en["manifest.description"],
+	);
 	// An unknown language is not accepted: manifest and copy would disagree.
-	assert.equal(buildManifest({ lang: "xx" }).lang, "en");
+	assert.equal(buildManifest({ lang: "xx" }).lang, "ja");
 });
 
-test("index decoration injects the dictionary and the label probes", () => {
+/** The exact strings the split plugin shipped; the ja pack must reproduce them. */
+const LEGACY_JA = {
+	"manifest.description": "DeepSeek Harness をアプリのように起動します。",
+	"notify.turn.completed": "作業完了",
+	"notify.turn.detailCompleted": "作業が完了しました。",
+	"sw.documentTitle": "オフライン — DSH",
+	"sw.offlineHeading": "オフラインです",
+};
+
+test("the completed ja pack reproduces the legacy Japanese host copy", async (t) => {
+	const missing = [];
+	for (const [key, expected] of Object.entries(LEGACY_JA)) {
+		const actual = COPY.ja[key];
+		if (typeof actual === "string" && actual !== "") {
+			assert.equal(actual, expected, `COPY.ja[${key}] matches the old copy`);
+		} else {
+			missing.push(key);
+		}
+	}
+	if (missing.length > 0) {
+		t.skip(`COPY.ja is not filled yet: ${missing.join(", ")}`);
+		return;
+	}
+	assert.equal(buildManifest({}).description, LEGACY_JA["manifest.description"]);
+	const turn = buildTurnEndPayload("s", { kind: "completed" }, { session: "", lang: "ja" });
+	assert.equal(turn.title, `DSH: ${LEGACY_JA["notify.turn.completed"]}`);
+	assert.equal(turn.body, LEGACY_JA["notify.turn.detailCompleted"]);
+	const { routes } = mount({});
+	const worker = await call(routes.get("/sw.js"));
+	assert.match(worker.text, new RegExp(`"sw\\.documentTitle":${JSON.stringify(LEGACY_JA["sw.documentTitle"])}`));
+	assert.match(worker.text, new RegExp(`"sw\\.offlineHeading":${JSON.stringify(LEGACY_JA["sw.offlineHeading"])}`));
+});
+
+test("index decoration injects the dictionary, the probes and the normalized language", () => {
 	const html = decorateIndex(INDEX, {});
 	assert.ok(html.includes("__RDSH_PWA_COPY__="), "the browser half needs the copy table");
 	assert.ok(html.includes("__RDSH_PWA_PROBES__="), "label matching needs every known locale");
-	const script = /<script>globalThis\.__RDSH_PWA_COPY__=(.*?);globalThis\.__RDSH_PWA_PROBES__=(.*?)<\/script>/.exec(html);
-	assert.ok(script !== null, "one inline script carries both");
-	const copy = JSON.parse(script[1].replaceAll("\\u003c", "<"));
-	const probes = JSON.parse(script[2].replaceAll("\\u003c", "<"));
-	assert.equal(copy.en["tab.mobile"], "Mobile");
-	assert.deepEqual(copy.ja, {}, "ja is a pack slot, not a translation");
-	assert.ok(probes.actions.includes("操作"), "probes stay bilingual");
+	assert.equal((html.match(/globalThis\.__RDSH_PWA_LANG__\s*=/g) ?? []).length, 1,
+		"the host language is exposed once");
+	const payload = injectedPayload(html);
+	assert.equal(payload.__RDSH_PWA_COPY__.en["tab.mobile"], "Mobile");
+	assert.deepEqual(payload.__RDSH_PWA_COPY__.ja, COPY.ja, "the ja pack travels even while it is being filled");
+	assert.deepEqual(payload.__RDSH_PWA_PROBES__, PROBES, "the full probe dictionary travels");
+	assert.ok(payload.__RDSH_PWA_PROBES__.actions.includes("操作"), "probes stay bilingual");
+	assert.equal(payload.__RDSH_PWA_LANG__, "ja", "the default host language reaches the browser half");
 	assert.ok(!html.includes("</script><script>globalThis.__RDSH_PWA_COPY__"), "no raw tag break");
+});
+
+test("an explicit en profile makes every host surface English", async () => {
+	const html = decorateIndex(INDEX, { lang: "en" });
+	assert.equal(injectedPayload(html).__RDSH_PWA_LANG__, "en", "the browser half is told en");
+
+	const manifest = buildManifest({ lang: "en" });
+	assert.equal(manifest.lang, "en");
+	assert.equal(manifest.description, COPY.en["manifest.description"]);
+
+	const { routes } = mount({ lang: "en" });
+	const worker = await call(routes.get("/sw.js"));
+	assert.match(worker.text, /"lang":"en"/);
+	assert.match(worker.text, /"sw\.offlineHeading":"You're offline"/);
+
+	const preview = JSON.parse((await call(
+		routes.get("/api/rdsh-pwa/push/preview"),
+		"GET",
+		"/api/rdsh-pwa/push/preview?sessionId=",
+	)).text);
+	assert.equal(preview.copy.lang, "en");
+	assert.equal(preview.turnEnd.title, "DSH: Work finished");
+	assert.equal(preview.turnEnd.body, "The work finished.");
 });
 
 test("index decoration is idempotent", () => {
@@ -187,6 +277,7 @@ test("index decoration is idempotent", () => {
 	const twice = decorateIndex(once, {});
 	assert.equal(once, twice, "a second tap must not duplicate the block");
 	assert.equal(once.split("<!--rdsh-pwa-->").length - 1, 1);
+	assert.equal((once.match(/globalThis\.__RDSH_PWA_LANG__\s*=/g) ?? []).length, 1);
 	assert.equal(decorateIndex("", {}), "");
 });
 
@@ -196,6 +287,68 @@ test("decorateIndex still works when the document has no viewport or head", () =
 	assert.ok(bare.includes("</div>"));
 	const noViewport = decorateIndex("<head></head><body></body>", {});
 	assert.match(noViewport, /<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">/);
+});
+
+test("an old marker without the payload gets copy, probes and lang exactly once", () => {
+	// What the split-plugin tap left behind: marker and PWA meta, no dictionary.
+	const legacy = INDEX.replace("</head>", [
+		"<!--rdsh-pwa-->",
+		'<meta name="mobile-web-app-capable" content="yes">',
+		'<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">',
+		"</head>",
+	].join(""));
+	const once = decorateIndex(legacy, {});
+	assert.equal((once.match(/globalThis\.__RDSH_PWA_COPY__\s*=/g) ?? []).length, 1);
+	assert.equal((once.match(/globalThis\.__RDSH_PWA_PROBES__\s*=/g) ?? []).length, 1);
+	assert.equal((once.match(/globalThis\.__RDSH_PWA_LANG__\s*=/g) ?? []).length, 1);
+	assert.equal(injectedPayload(once).__RDSH_PWA_LANG__, "ja");
+	assert.equal((once.match(/name="mobile-web-app-capable"/g) ?? []).length, 1,
+		"the legacy meta is not added a second time");
+	assert.equal((once.match(/<!--rdsh-pwa-->/g) ?? []).length, 1);
+	// Re-tapping the finished response is a no-op.
+	assert.equal(decorateIndex(once, {}), once);
+});
+
+test("a partial payload gets only the missing globals, with or without the marker", () => {
+	const copyOnly = INDEX.replace("</head>",
+		'<script>globalThis.__RDSH_PWA_COPY__ = {"en":{}};</script></head>');
+	const copyAndProbes = INDEX.replace("</head>",
+		'<script>globalThis.__RDSH_PWA_COPY__ = {"en":{}};globalThis.__RDSH_PWA_PROBES__ = {actions:["操作"]};</script></head>');
+	for (const base of [copyOnly, copyAndProbes]) {
+		for (const html of [base, base.replace("<head>", "<head><!--rdsh-pwa-->")]) {
+			const fixed = decorateIndex(html, {});
+			assert.equal((fixed.match(/globalThis\.__RDSH_PWA_COPY__\s*=/g) ?? []).length, 1,
+				"an existing copy table is not duplicated");
+			assert.equal((fixed.match(/globalThis\.__RDSH_PWA_PROBES__\s*=/g) ?? []).length, 1,
+				"an existing probe table is not duplicated");
+			assert.equal((fixed.match(/globalThis\.__RDSH_PWA_LANG__\s*=/g) ?? []).length, 1,
+				"the missing language is added");
+			assert.equal(injectedPayload(fixed).__RDSH_PWA_LANG__, "ja");
+			assert.equal(decorateIndex(fixed, {}), fixed, "the result is stable");
+		}
+	}
+});
+
+test("normalizeConfig rejects array, null and hostile language values", () => {
+	for (const config of [null, [], "ja", 42, { lang: ["en"] }, { lang: "</script><script>alert(1)</script>" }]) {
+		const html = decorateIndex(INDEX, config);
+		assert.ok(!html.includes("alert(1)"), "no hostile value reaches the document");
+		assert.equal(injectedPayload(html).__RDSH_PWA_LANG__, "ja", "the default is used instead");
+	}
+	const english = decorateIndex(INDEX, { lang: "en" });
+	assert.equal(injectedPayload(english).__RDSH_PWA_LANG__, "en");
+	const script = /<script>([\s\S]*?)<\/script>/.exec(english);
+	assert.ok(script !== null);
+	assert.doesNotThrow(() => new Function(script[1]), "the injected payload is valid JavaScript");
+});
+
+test("hostile config values cannot break out of the injected markup", () => {
+	const html = decorateIndex(INDEX, {
+		appleStatusBarStyle: '"><script>alert(1)</script>',
+	});
+	assert.ok(!html.includes("alert(1)"), "the rejected value never reaches the document");
+	assert.ok(html.includes('name="apple-mobile-web-app-status-bar-style" content="black-translucent"'),
+		"the default is used instead");
 });
 
 test("routes serve the manifest, the worker and the icons", async () => {
@@ -209,6 +362,8 @@ test("routes serve the manifest, the worker and the icons", async () => {
 	assert.ok(taps.length >= 1, "at least the PWA tap");
 	const decorated = taps.reduce((html, tap) => tap(html), INDEX);
 	assert.equal(decorated.split("<!--rdsh-pwa-->").length - 1, 1, "one PWA block");
+	assert.equal(injectedPayload(decorated).__RDSH_PWA_LANG__, "ja",
+		"the mounted tap injects the normalized host language");
 	assert.ok(decorated.includes("__RDSH_MOBILE_UX_CONFIG__"), "the mobile-ux half mounted");
 	// Live speed subscribes to the model stream: proof the host half ran.
 	assert.ok(listeners.some((entry) => entry.event === "llm/stream"), "mobile-ux subscribed to llm/stream");
@@ -230,6 +385,7 @@ test("routes serve the manifest, the worker and the icons", async () => {
 	assert.equal(manifest.status, 200);
 	assert.match(manifest.headers["content-type"], /application\/manifest\+json/);
 	assert.equal(JSON.parse(manifest.text).display, "standalone");
+	assert.equal(JSON.parse(manifest.text).lang, "ja", "the default document language is ja");
 	assert.equal(manifest.headers["cache-control"], "no-cache");
 
 	const worker = await call(routes.get("/sw.js"));
@@ -260,14 +416,67 @@ test("routes serve the manifest, the worker and the icons", async () => {
 });
 
 test("the worker injects the configured navigation timeout", async () => {
-	const { routes } = mount({ navigationTimeoutMs: 2500 });
+	const { routes } = mount({ navigationTimeoutMs: 2500, lang: "en" });
 	const worker = await call(routes.get("/sw.js"));
 	assert.match(worker.text, /"navigationTimeoutMs":2500/);
 	assert.match(worker.text, /self\.__RDSH_PWA_CONFIG__=/);
 	// The offline page and push defaults are rendered by the worker, so its
-	// copy travels in the same config header.
+	// copy travels in the same config header. An explicit en profile keeps the
+	// previous English copy.
 	assert.match(worker.text, /"lang":"en"/);
 	assert.match(worker.text, /"sw\.offlineHeading":"You're offline"/);
+});
+
+test("the worker follows the ja default but accepts the en dictionary", async () => {
+	const { routes } = mount({});
+	const worker = await call(routes.get("/sw.js"));
+	assert.match(worker.text, /"lang":"ja"/);
+	assert.match(worker.text, new RegExp(`"sw\\.offlineHeading":${JSON.stringify(copyFor("ja")["sw.offlineHeading"])}`));
+});
+
+test("the worker treats the markdown-cjk entry chunks as cacheable", async () => {
+	// The host rewrites the document to load /markdown-cjk/v1/*.js instead of
+	// the stock assets. If the worker does not cache that path, an offline
+	// launch serves the shell but the entry scripts fail and the plugin never
+	// boots. Evaluate sw.js in a stub scope so this is the worker's own
+	// classification, not a comment in the file.
+	const source = await readFile(new URL("../sw.js", import.meta.url), "utf8");
+	const sandbox = {
+		self: {
+			__RDSH_PWA_BUILD__: "test",
+			__RDSH_PWA_CONFIG__: {},
+			registration: { scope: "http://127.0.0.1/" },
+			location: { origin: "http://127.0.0.1" },
+			addEventListener() {},
+			clients: { claim: async () => {} },
+		},
+		caches: { open: async () => ({}) },
+		fetch: async () => { throw new Error("offline"); },
+		URL,
+		Response,
+		AbortController,
+		setTimeout,
+		clearTimeout,
+	};
+	runInNewContext(`${source}\n;globalThis.__isStatic = isStatic;`, sandbox);
+	assert.equal(sandbox.__isStatic(new URL("http://127.0.0.1/markdown-cjk/v1/index-CN7NIWNw.js")), true);
+	assert.equal(sandbox.__isStatic(new URL("http://127.0.0.1/markdown-cjk/v1/vendor-DcuzkuQH.js")), true);
+	assert.equal(sandbox.__isStatic(new URL("http://127.0.0.1/assets/index-BxpfOGf3.css")), true);
+	assert.equal(sandbox.__isStatic(new URL("http://127.0.0.1/api/settings/describe")), false,
+		"live API answers still go to the network");
+});
+
+test("notification copy defaults to the package language and keeps an explicit override", async () => {
+	const previewOf = async (config) => {
+		const { routes } = mount(config);
+		const route = routes.get("/api/rdsh-pwa/push/preview");
+		const response = await call(route, "GET", "/api/rdsh-pwa/push/preview?sessionId=");
+		return JSON.parse(response.text);
+	};
+	assert.equal((await previewOf({})).copy.lang, "ja", "top-level lang is the notification default");
+	assert.equal((await previewOf({ lang: "en" })).copy.lang, "en", "an en package keeps English notifications");
+	assert.equal((await previewOf({ notifications: { lang: "en" } })).copy.lang, "en",
+		"notifications.lang still wins over the package default");
 });
 
 test("routes reject methods they do not own", async () => {

@@ -1,11 +1,10 @@
 /**
- * Static checks for the phone/desktop split (#17, #15).
+ * Static checks for the restored phone/desktop split.
  *
- * The behaviour these guard is "what happens on a narrow desktop window":
- * nothing may be hidden, relabelled or hijacked there, and the settings tabs
- * may not be duplicated. That is hard to assert without a browser, but the
- * decision points are few and their shape is the contract, so checking the
- * source is enough to catch a regression that reverts a gate to `narrow()`.
+ * The legacy contract is width-only: at 767px or below the phone UI (hide
+ * list, settings tab merge, Enter, attachment hijack, push owner) applies even
+ * with a mouse. A wide window keeps the stock UI, and the desktop notification
+ * opt-in stays an opt-in. These checks pin the decision points.
  */
 
 import assert from "node:assert/strict";
@@ -31,78 +30,74 @@ function arrayLiteral(name) {
 	return CLIENT.slice(start, end === -1 ? undefined : end);
 }
 
-test("hiding is decided by the device, not by the window width", () => {
-	// #17: a 683px desktop window has a mouse, a keyboard and local editors,
-	// so every control it can use has to stay. Only the phone predicate gates
-	// the hide list; `narrow()` is left for the layout.
+test("hiding is decided by the phone width, not by the pointer", () => {
+	// The reference plugin hid the list whenever the window was <=767px,
+	// including a narrow desktop window driven by a mouse.
 	const body = functionBody("applyHideList");
-	assert.match(body, /const hideOnThisDevice = !disabled && phone\(\);/, "the hide decision ignores the device");
-	assert.match(body, /if \(hideOnThisDevice && shouldHide\(label, labels\)\)/, "buttons are hidden without asking the device");
-	assert.match(body, /modal !== null && narrow\(\) && phone\(\)/, "the PWA/Input tab merge no longer follows the phone layout");
-	assert.doesNotMatch(body, /!disabled && narrow\(\)/, "a narrow desktop window would hide controls again");
+	assert.match(body, /const hideOnThisDevice = !disabled && narrow\(\);/, "the hide decision ignores the width");
+	assert.match(body, /if \(hideOnThisDevice && shouldHide\(label, labels\)\)/, "buttons are hidden without asking the width");
+	assert.match(body, /modal !== null && narrow\(\)/, "the PWA/Input tab merge no longer follows the phone layout");
+	assert.doesNotMatch(body, /!disabled && phone\(\)/, "the hide list became device-gated again");
 });
 
-test("the hide-settings attribute follows the device", () => {
+test("the hide-settings attribute follows the phone width", () => {
 	assert.match(CLIENT, /const onPhone = phone\(\);/, "decorateFast does not ask the device");
 	assert.match(
 		CLIENT,
-		/document\.documentElement\.toggleAttribute\("data-rdsh-hide-settings", !hideListDisabled && onPhone\);/,
-		"the settings-hiding attribute is still gated on the width",
+		/document\.documentElement\.toggleAttribute\("data-rdsh-hide-settings", !hideListDisabled && narrow\(\)\);/,
+		"the settings-hiding attribute is not width-gated",
 	);
-	// The CSS that consumes it may live outside the phone media block only
-	// because the attribute is a phone-only signal; make both halves agree.
 	assert.match(CLIENT, /html\[data-rdsh-hide-settings\] \[data-rdsh-setting-hidden\]/);
 });
 
-test("label rewrites and the plus hijack stay on phones", () => {
-	// #17: these changed what a narrow desktop window does, not just how it
-	// looks: the account menu vanished, "+" stopped opening commands, and the
-	// composer lost its stock label.
+test("label rewrites and the plus hijack follow phone()", () => {
+	// `phone()` is the width rule, so a narrow fine pointer still gets the
+	// phone UI while a wide window (mouse or touch) keeps the stock one.
+	assert.match(functionBody("phone"), /return narrow\(\);/, "phone() is not the width rule");
 	const sidebar = functionBody("decorateSidebarSettingsRow");
-	assert.match(sidebar, /if \(!phone\(\)\) \{/, "the sidebar Settings row is still width-gated");
+	assert.match(sidebar, /if \(!phone\(\)\) \{/, "the sidebar Settings row is not phone-gated");
 	assert.match(sidebar, /removeAttribute\("data-rdsh-more-row"\)/, "leaving the phone layout leaves the account row hidden");
-	assert.match(functionBody("decorateComposer"), /if \(phone\(\)\) \{/, "the composer label is still width-gated");
-	assert.match(functionBody("onMouseDownCapture"), /if \(!phone\(\)\) return;/, "the mousedown guard is still width-gated");
-	assert.match(functionBody("onClickCapture"), /addButtonOf\(target\) !== null && phone\(\)/, "the + hijack is still width-gated");
+	assert.match(functionBody("decorateComposer"), /if \(phone\(\)\) \{/, "the composer label is not phone-gated");
+	assert.match(functionBody("onMouseDownCapture"), /if \(!phone\(\)\) return;/, "the mousedown guard is not phone-gated");
+	assert.match(functionBody("onClickCapture"), /addButtonOf\(target\) !== null && phone\(\)/, "the + hijack is not phone-gated");
 });
 
-test("only controls that dead-end on a phone are hidden by default", () => {
-	// Fail open: anything that works on a phone, or is a design judgement,
-	// stays. The three named by #17 plus the menu items a phone can use.
+test("the reference 13-label hide list is restored", () => {
 	const defaults = arrayLiteral("HIDE_DEFAULT");
 	for (const label of [
-		"Built-in plugins",
-		"Show coding view",
-		"Keyboard shortcuts",
+		"Open in Files",
+		"More ways to open",
+		"More actions",
 		"Feedback",
 		"Sign in",
-		"More actions",
-		"More ways to open",
+		"Keyboard shortcuts",
 		"Desktop notifications",
+		"Show coding view",
+		"Built-in plugins",
+		"Open in Text Editor",
+		"Open in editor",
+		"Open in Explorer",
+		"Reveal in Finder",
 	]) {
-		assert.equal(defaults.includes(label), false, `${label} is hidden without a phone-only reason`);
+		assert.equal(defaults.includes(`"${label}"`), true, `${label} is missing from the hide list`);
 	}
-	assert.match(defaults, /"Open configuration file"/, "the host-side action moved out of its own rule");
+	assert.match(defaults, /"Open configuration file"/, "the merged-build addition was dropped");
 });
 
 test("the mobile tab only inlines the other sections at phone width", () => {
-	// #15: on a desktop, "App" and "Input" are their own visible tabs. The
-	// Mobile tab inlining them as well printed both headings twice.
 	const body = functionBody("MobileSection");
-	assert.match(body, /const onPhone = s\.phone === true;/, "the section still keys off the layout");
-	assert.match(body, /s\.narrow && onPhone \? h\(InputSection\) : null/, "InputSection is inlined on a narrow desktop window");
+	assert.match(body, /const onPhone = s\.phone === true;/, "the section still keys off the device");
+	assert.match(body, /s\.narrow && onPhone \? h\(InputSection\) : null/, "InputSection is not inlined at phone width");
 	assert.match(
 		body,
 		/s\.narrow && onPhone && typeof globalThis\.__RDSH_PWA_SETTINGS_SECTION__ === "function"/,
-		"the PWA section is inlined on a narrow desktop window",
+		"the PWA section is not inlined at phone width",
 	);
-	assert.doesNotMatch(body, /^\s+h\(InputSection\),$/m, "the old unconditional InputSection call is back");
-	// Both tabs must still exist for the wide layout.
 	assert.match(CLIENT, /id: "pwa",/, "the App tab is gone");
 	assert.match(CLIENT, /id: "mobile-ux-input",/, "the Input tab is gone");
 });
 
-test("the phone-only settings cards are not shown on a desktop", () => {
+test("the phone-only settings cards follow the phone layout", () => {
 	const body = functionBody("MobileSection");
 	assert.match(body, /onPhone \? t\("mux\.section\.desc"\) : t\("mux\.section\.desc\.desktop"\)/, "the desktop description is missing");
 	assert.match(body, /onPhone \? h\("p", \{ className: "rdsh-mux-note" \}, t\("mux\.section\.plusNote"\)\) : null/, "the + note is shown on a desktop");
@@ -110,16 +105,14 @@ test("the phone-only settings cards are not shown on a desktop", () => {
 	assert.match(body, /t\("mux\.hidden\.title"\)/, "the hidden-controls card disappeared entirely");
 });
 
-test("a desktop send can opt into phone-style notifications", () => {
-	// #15: `onlyMobileTurns: true` stays the host default; the client marks its
-	// own sends through the endpoint a phone uses once this browser opts in.
+test("a wide desktop stays stock unless it opts into phone notifications", () => {
 	assert.match(HOST, /onlyMobileTurns: true/, "the host default must stay phone-only");
 	assert.match(CLIENT, /const NOTIFY_DEVICE_TURNS_KEY = "rdsh-mobile-ux:notify-device-turns";/);
 	assert.match(functionBody("readNotifyDeviceTurns"), /NOTIFY_DEVICE_TURNS_KEY/);
 	const mark = functionBody("markMobileSession");
-	assert.match(mark, /if \(!phone\(\) && !notifyDeviceTurns\(\)\) return;/, "markMobileSession ignores the opt-in (or is still width-gated)");
-	// Both send paths have to honour it, or only one kind of send is notified.
-	assert.match(functionBody("onKeyDownCapture"), /if \(!finger && !notifyDeviceTurns\(\)\) return;/, "Enter sends are not marked on a desktop");
+	assert.match(mark, /if \(!phone\(\) && !notifyDeviceTurns\(\)\) return;/, "markMobileSession ignores the opt-in");
+	assert.match(functionBody("onKeyDownCapture"), /const finger = phone\(\);/, "Enter no longer follows the phone width");
+	assert.match(functionBody("onKeyDownCapture"), /if \(!finger && !notifyDeviceTurns\(\)\) return;/, "Enter ignores the desktop opt-in");
 	assert.match(functionBody("onClickCapture"), /if \(phone\(\) \|\| notifyDeviceTurns\(\)\)/, "button sends are not marked on a desktop");
 	assert.match(functionBody("MobileSection"), /writeNotifyDeviceTurns\(event\.target\.checked\)/, "the setting has no control");
 });

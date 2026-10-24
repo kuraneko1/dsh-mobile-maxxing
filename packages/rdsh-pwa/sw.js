@@ -11,7 +11,8 @@
  *               to a built-in offline page — a launch never shows the browser's
  *               offline error
  *   static      cache first + background revalidate for /assets, /plugins,
- *               /pwa and the favicons; hashed URLs make staleness harmless
+ *               /pwa, /markdown-cjk and the favicons; hashed URLs make
+ *               staleness harmless
  *   /api, /hmr, /terminal, non-GET, cross-origin, ranged requests
  *               never intercepted: live state must come from the server
  */
@@ -32,8 +33,16 @@ const SCOPE = new URL(self.registration.scope);
 const SHELL_URL = new URL("./", SCOPE).href;
 const MANIFEST_URL = new URL("manifest.webmanifest", SCOPE).href;
 
-/** Paths, relative to the scope, whose responses are safe to serve from cache. */
-const STATIC_PREFIXES = ["assets/", "plugins/", "pwa/"];
+/**
+ * Paths, relative to the scope, whose responses are safe to serve from cache.
+ *
+ * `markdown-cjk/` is the host half's serve-time patched renderer. The document
+ * is rewritten to load those URLs instead of `assets/`, so an offline launch
+ * needs them in the same cache as the stock assets; without this prefix the
+ * rewritten entry chunks are a network-only dependency and the app cannot boot
+ * while offline.
+ */
+const STATIC_PREFIXES = ["assets/", "plugins/", "pwa/", "markdown-cjk/"];
 const STATIC_FILES = new Set(["favicon.svg", "favicon-dark.svg", "manifest.webmanifest"]);
 
 /** Never intercept these: the UI reads live state, terminal and HMR need sockets. */

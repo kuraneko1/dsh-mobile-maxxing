@@ -26,10 +26,27 @@ window.__ModuleLoader__.load({
     /** Upstream label vocabularies (never rendered), for language-independent matching. */
     const PROBES = globalThis.__RDSH_PWA_PROBES__ ?? {};
 
-    /** The document's language when this dictionary carries it, else `en`. */
+    /** One normalised language this dictionary can render, or "". */
+    function knownLang(value) {
+      const lang = String(value ?? "").toLowerCase().split("-")[0];
+      return lang !== "" && COPY[lang] !== undefined ? lang : "";
+    }
+
+    /**
+     * The language host injected for this page, then the document language,
+     * then English.
+     *
+     * `index.js` sets `globalThis.__RDSH_PWA_LANG__` from its own `lang`
+     * option (ja by default). That independent value is what makes the
+     * reference Japanese UI appear even when the shell document stays
+     * `lang="en"`, and an explicit en must win over a ja shell in the same
+     * way. The document language is only the fallback for a host that did not
+     * inject the global.
+     */
     function currentLang() {
-      const lang = String(document.documentElement.lang || "").toLowerCase().split("-")[0];
-      return lang !== "" && COPY[lang] !== undefined ? lang : "en";
+      return knownLang(globalThis.__RDSH_PWA_LANG__)
+        || knownLang(document.documentElement.lang)
+        || "en";
     }
 
     /**
@@ -115,13 +132,11 @@ window.__ModuleLoader__.load({
     const UPDATE_MIN_GAP_MS = 5 * 60 * 1000;
     // Phone layout, in one place for both halves of this file.
     //
-    // Width alone called a landscape phone (852x393, 844x390) a desktop even
-    // though upstream DSH still treats everything below 1024 as narrow, which
-    // left the 768-1023 band hybrid: stock rail on the left, no drawer, no
-    // swipe, no floating button. The second clause covers that orientation
-    // without catching a narrow desktop window (a mouse reports
-    // `pointer: fine`) or a landscape tablet (short side above 500px).
-    const NARROW_QUERY = "(max-width: 767px), (orientation: landscape) and (max-width: 1023px) and (max-height: 500px) and (pointer: coarse)";
+    // The legacy contract is width-only: every window at or below 767px gets
+    // the phone layout, mounted app or not, mouse or finger. A landscape phone
+    // wider than that stays in the desktop layout, exactly as the reference
+    // build does.
+    const NARROW_QUERY = "(max-width: 767px)";
     const INSTALL_PROMPT_KEY = "rdsh-pwa:install-prompt-dismissed";
     const INSTALL_PROMPT_SNOOZE_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -973,14 +988,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     const useState = React.useState;
     const useEffect = React.useEffect;
 
-    // Same predicate as the PWA part above: a landscape phone is a phone.
-    // Both halves must agree or the shell and the layout disagree on width.
-    const NARROW_QUERY = "(max-width: 767px), (orientation: landscape) and (max-width: 1023px) and (max-height: 500px) and (pointer: coarse)";
-    // `phone()` asks what the device is, not how wide the window is. A desktop
-    // window dragged to 683px still has a mouse, a keyboard and a local editor,
-    // so hiding the app's own controls there is a regression (#17).
-    const COARSE_QUERY = "(pointer: coarse)";
-    const ANY_COARSE_QUERY = "(any-pointer: coarse)";
+    // The same width-only query as the PWA part. Both halves must agree or
+    // the shell and the layout disagree on where the phone begins.
+    const NARROW_QUERY = "(max-width: 767px)";
     const HIDE_OVERRIDE_KEY = "rdsh-mobile-ux:hide-disabled";
     const HIDE_EXTRA_KEY = "rdsh-mobile-ux:hide-extra";
     const NOTIFY_DEVICE_TURNS_KEY = "rdsh-mobile-ux:notify-device-turns";
@@ -993,7 +1003,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       ? CONFIG.runningAnimation
       : "outline";
     /** Shown in Settings so a stale PWA bundle is easy to spot. */
-    const BUILD = "2026-10-23.review-fixes";
+    const BUILD = "2026-10-24.legacy-parity";
 
     // Upstream labels are matched through PROBES (all known locales). The
     // English fallbacks keep decoration working if the host's probe script
@@ -1005,18 +1015,25 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     const CONTEXT_PROBE = probeRegex("context", "i", "context");
 
     /**
-     * Controls that have no meaning on a phone.
+     * Controls that have no meaning inside an installed app on a phone.
      *
-     * Fail open: only an action that is guaranteed to dead-end in a phone
-     * browser belongs here. "Built-in plugins", "Show coding view" and
-     * "Keyboard shortcuts" are useful on a narrow desktop window (and arguably
-     * on a phone), so they stay (#17). Every label that is only matched by
-     * style/class does not belong here either.
+     * This is the reference list, restored. It is applied only at phone width
+     * (<= 767px), so a wide desktop keeps every entry and a narrow window gets
+     * the same shell the legacy plugin produced. "Open configuration file" is
+     * an addition from the merged build: the host-side action also dead-ends
+     * in a phone browser.
      */
     const HIDE_DEFAULT = [
-      // The config file lives on the host; a phone browser cannot open it.
       "Open configuration file",
       "Open in Files",
+      "More ways to open",
+      "More actions",
+      "Feedback",
+      "Sign in",
+      "Keyboard shortcuts",
+      "Desktop notifications",
+      "Show coding view",
+      "Built-in plugins",
       // Bundled editors and file managers are desktop affordances; on a phone
       // the tap only produces an error or a dead end.
       "Open in Text Editor",
@@ -1042,8 +1059,8 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
     const state = {
       narrow: window.matchMedia(NARROW_QUERY).matches,
-      // What kind of device this is (see `phone()`), kept in the store so the
-      // settings UI can stop offering phone-only rows on a desktop.
+      // The phone layout predicate (see `phone()`), kept in the store so the
+      // settings UI can decide which cards and rows apply.
       phone: phone(),
       drawerOpen: false,
       hidden: [],
@@ -1084,43 +1101,16 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     /**
-     * Is this a phone (or an installed app), as opposed to a narrow window on
-     * a desktop?
+     * Is this device running the phone UI?
      *
-     * #17: width alone is not a phone signal. A 683px desktop window is still
-     * driven by a mouse and a keyboard and still has local editors and file
-     * managers, so the controls it can use must stay visible. This predicate
-     * is the one for hiding, label rewriting and send-side behaviour; the
-     * layout (drawer, columns) keeps using `narrow()`, which really is about
-     * width.
-     *
-     * Standalone/fullscreen counts because an installed app has no browser
-     * chrome to fall back on. `navigator.standalone` covers iOS, which does not
-     * report `display-mode` for a home-screen app.
+     * The legacy contract is the window width alone: at 767px or below, a
+     * mouse, a hardware keyboard, an installed app and a narrow desktop
+     * window all get the same layout, Enter handling, attachment hijack,
+     * settings tab merge and push ownership. A wide window stays stock even
+     * when its pointer is coarse; pointer kind does not widen the phone UI.
      */
     function phone() {
-      if (typeof window.matchMedia !== "function") return false;
-      if (window.matchMedia(COARSE_QUERY).matches) return true;
-      // A phone with a mouse attached reports a fine primary pointer, and a
-      // touchscreen laptop reports a coarse secondary one. Only the narrow
-      // layout separates them, so the fallback asks both questions. Installed
-      // desktop PWAs and a fullscreen desktop window stay desktops: they have
-      // a keyboard and local editors, and hiding stock UI there is #17.
-      return narrow() && window.matchMedia(ANY_COARSE_QUERY).matches;
-    }
-
-    /**
-     * Is the primary pointer a finger?
-     *
-     * Enter handling keys off this rather than off `narrow()`: a desktop
-     * window dragged narrow is still driven by a keyboard, and losing Enter
-     * there (the stock composer sends on plain Enter) is a real regression.
-     * A tablet in landscape is a phone for gestures but may have a keyboard
-     * attached; `pointer` describes the primary input, which is what the
-     * gesture came from.
-     */
-    function coarsePointer() {
-      return typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
+      return narrow();
     }
 
     const ENTER_TO_SEND_KEY = "rdsh-mobile-ux:enter-to-send";
@@ -1491,6 +1481,91 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     // ---------------------------------------------------------------------
+    // Scroll diagnostics (devtools): which element actually moves?
+    //
+    // Restored with the Settings cards. Nothing here hard-codes a device or a
+    // host: every value is read from the live DOM / window at call time.
+    // ---------------------------------------------------------------------
+    const lastScrolls = [];
+
+    function recordScroll(event) {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const style = getComputedStyle(target);
+      lastScrolls.push({
+        at: Date.now(),
+        tag: target.tagName,
+        cls: String(target.className).slice(0, 120),
+        id: target.id,
+        scrollTop: Math.round(target.scrollTop),
+        scrollHeight: target.scrollHeight,
+        clientHeight: target.clientHeight,
+        overflowY: style.overflowY,
+      });
+      if (lastScrolls.length > 12) lastScrolls.shift();
+    }
+
+    function scrollables() {
+      const list = [];
+      for (const element of document.querySelectorAll("*")) {
+        if (element.scrollHeight <= element.clientHeight + 2) continue;
+        const style = getComputedStyle(element);
+        if (style.overflowY !== "auto" && style.overflowY !== "scroll") continue;
+        list.push({
+          tag: element.tagName,
+          cls: String(element.className).slice(0, 120),
+          id: element.id,
+          scrollTop: Math.round(element.scrollTop),
+          scrollHeight: element.scrollHeight,
+          clientHeight: element.clientHeight,
+          overflowY: style.overflowY,
+          position: style.position,
+        });
+      }
+      return list;
+    }
+
+    function scrollChain() {
+      const list = [];
+      let node = document.querySelector("[data-composer-input]") || document.querySelector('[class*="scrollBody"]');
+      while (node !== null && node !== document.documentElement) {
+        const style = getComputedStyle(node);
+        if (node.scrollHeight > node.clientHeight + 2 || style.overflowY === "auto" || style.overflowY === "scroll") {
+          list.push({
+            tag: node.tagName,
+            cls: String(node.className).slice(0, 120),
+            scrollTop: Math.round(node.scrollTop),
+            scrollHeight: node.scrollHeight,
+            clientHeight: node.clientHeight,
+            overflowY: style.overflowY,
+          });
+        }
+        node = node.parentElement;
+      }
+      return list;
+    }
+
+    /** Numbers that distinguish the iOS native gap from the safe-area chin. */
+    function readViewportMetrics() {
+      const viewport = window.visualViewport;
+      const screenHeight = window.screen && Number.isFinite(window.screen.height) ? Math.round(window.screen.height) : 0;
+      const innerHeight = Math.round(window.innerHeight);
+      const rootStyle = getComputedStyle(document.documentElement);
+      return {
+        screenHeight,
+        innerHeight,
+        clientHeight: document.documentElement.clientHeight,
+        visualHeight: viewport ? Math.round(viewport.height) : 0,
+        visualOffset: viewport ? Math.round(viewport.offsetTop) : 0,
+        gap: screenHeight > 0 ? screenHeight - innerHeight : null,
+        standalone: window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches,
+        nativeGap: document.documentElement.hasAttribute("data-rdsh-native-gap"),
+        safeTop: rootStyle.getPropertyValue("--rdsh-safe-top").trim() || "0px",
+        safeBottom: rootStyle.getPropertyValue("--rdsh-safe-bottom").trim() || "0px",
+      };
+    }
+
+    // ---------------------------------------------------------------------
     // Decoration: live DOM → stable hooks
     // ---------------------------------------------------------------------
     function frame() {
@@ -1526,9 +1601,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     function applyHideList(disabled) {
       const labels = hideLabels();
       const hidden = new Set();
-      // #17: hiding is a phone decision. A narrow desktop window keeps every
-      // control it can use, and the settings card stays honest about it.
-      const hideOnThisDevice = !disabled && phone();
+      // The legacy hide list is a width rule, not a device rule: a narrow
+      // window gets it even with a mouse. A wide desktop keeps every control.
+      const hideOnThisDevice = !disabled && narrow();
       for (const element of document.querySelectorAll("button[aria-label], [role='menuitem']")) {
         const label = labelOf(element);
         if (label === "" || label.length > 48) continue;
@@ -1541,10 +1616,8 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       }
       const modal = document.querySelector('[data-shortcut-modal="settings"]');
       // The tab merge is the phone layout: `MobileSection` inlines the PWA and
-      // Input sections there, so the separate tabs vanish with them (#15). It
-      // asks the device as well as the width, because a narrow desktop window
-      // inlines nothing and must keep all three tabs.
-      if (modal !== null && narrow() && phone()) {
+      // Input sections there, so the separate tabs vanish with them.
+      if (modal !== null && narrow()) {
         for (const button of modal.querySelectorAll("nav button")) {
           const label = (button.textContent || "").trim();
           const merged = label === t("tab.pwa") || label === t("tab.input");
@@ -1744,7 +1817,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
      * made transparent, so it has to go together with its attributes.
      */
     function clearPhoneHooks() {
-      for (const attribute of ["data-rdsh-header-title", "data-rdsh-header-running", "data-rdsh-typing", "data-rdsh-rtab"]) {
+      closeQueueUi();
+      clearWorkspacePicker();
+      for (const attribute of ["data-rdsh-header-title", "data-rdsh-header-running", "data-rdsh-typing", "data-rdsh-rtab", "data-rdsh-sidebar-toggle", "data-rdsh-route-heading"]) {
         for (const element of document.querySelectorAll(`[${attribute}]`)) element.removeAttribute(attribute);
       }
       for (const layer of document.querySelectorAll("[data-rdsh-typing-layer]")) layer.remove();
@@ -1845,6 +1920,49 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       rightPanelIO = null;
       rightPanelNode = null;
       document.documentElement.removeAttribute("data-rdsh-rightpanel-open");
+    }
+
+    /**
+     * Promote a docked right panel to fullscreen once.
+     *
+     * The reference build did this on every slow decorate pass, via the
+     * panel's own "Enter fullscreen" button. Upstream now labels the same
+     * control "Fullscreen" / "全屏"; match the known labels, but only inside a
+     * laid-out panel and only once per button, so a hidden ghost from another
+     * route can never be clicked and a failed promotion cannot loop.
+     */
+    let rightPanelFitPending = false;
+
+    function visibleFullscreenButton() {
+      const selector = ariaLabelSelector("button", "fullscreen", ["Enter fullscreen", "Fullscreen"]);
+      for (const button of document.querySelectorAll(selector)) {
+        const rect = button.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        if (button.closest(RIGHT_PANEL_ROOT) === null) continue;
+        if (button.closest("[hidden]") !== null) continue;
+        if (getComputedStyle(button).visibility === "hidden") continue;
+        return button;
+      }
+      return null;
+    }
+
+    function ensureRightPanelFits() {
+      if (!narrow()) {
+        rightPanelFitPending = false;
+        return;
+      }
+      const enter = visibleFullscreenButton();
+      if (enter === null) {
+        // The panel closed, or the click turned the button into "exit": the
+        // next open may promote again.
+        rightPanelFitPending = false;
+        return;
+      }
+      if (rightPanelFitPending) return;
+      if (enter.getAttribute("data-rdsh-auto-fired") === "1") return;
+      rightPanelFitPending = true;
+      enter.setAttribute("data-rdsh-auto-fired", "1");
+      enter.click();
     }
 
     /**
@@ -2354,6 +2472,66 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       crumb.toggleAttribute("data-rdsh-header-running", running);
     }
 
+    /**
+     * Give a full-screen route heading a phone-only inset for the FAB.
+     *
+     * Plugins and Automation tasks render their own H1 near the left edge. On
+     * a phone the floating drawer button sits over x8..48, so the heading row
+     * needs to start at 56px or later. Identify it structurally: a visible H1
+     * in the centre column, outside the conversation/sidebar/chat header, and
+     * only when the chat surface is not the one on screen. No upstream hashed
+     * class is used.
+     */
+    function decorateRouteHeading() {
+      const tagged = [...document.querySelectorAll("[data-rdsh-route-heading]")];
+      const clear = () => {
+        for (const wrapper of tagged) wrapper.removeAttribute("data-rdsh-route-heading");
+      };
+      if (!narrow()) {
+        clear();
+        return;
+      }
+      const conversation = document.querySelector("[data-rdsh-conversation]");
+      if (conversation !== null) {
+        const rect = conversation.getBoundingClientRect();
+        const visible = rect.width > 0 && rect.height > 0
+          && getComputedStyle(conversation).visibility !== "hidden"
+          && conversation.closest("[hidden]") === null;
+        if (visible) {
+          // A chat is on screen: its H1 (welcome card) is not a route heading.
+          clear();
+          return;
+        }
+      }
+      const scope = document.querySelector("[data-rdsh-center-col]") ?? document.body;
+      if (scope === null) {
+        clear();
+        return;
+      }
+      const heading = [...scope.querySelectorAll("h1")]
+        .filter((h1) => {
+          const rect = h1.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) return false;
+          return h1.closest("[data-rdsh-conversation], [data-rdsh-sidebar], [data-rdsh-header], header[data-window-drag], nav, [role='dialog'], [data-shortcut-modal], article") === null;
+        })
+        .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0];
+      if (heading === undefined) {
+        clear();
+        return;
+      }
+      const wrapper = heading.parentElement;
+      if (wrapper === null || wrapper === scope) {
+        clear();
+        return;
+      }
+      if (wrapper.hasAttribute("data-rdsh-route-heading") || heading.getBoundingClientRect().left < 56) {
+        wrapper.setAttribute("data-rdsh-route-heading", "");
+      }
+      for (const stale of tagged) {
+        if (stale !== wrapper) stale.removeAttribute("data-rdsh-route-heading");
+      }
+    }
+
     function decorateSessionTitleTyping() {
       if (!narrow()) return;
       const running = globalThis.__RDSH_MOBILE_UX_RUNNING__ instanceof Set
@@ -2476,23 +2654,92 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       }
     }
 
+    /** One scroll-down bubble per question card, keyed by its scroll body. */
+    const questionArrowState = new Map();
+
+    function clearQuestionArrows() {
+      for (const { button, body, handler } of questionArrowState.values()) {
+        body.removeEventListener("scroll", handler);
+        button.remove();
+      }
+      questionArrowState.clear();
+    }
+
+    function decorateQuestionArrow(card) {
+      const body = [...card.querySelectorAll("div")].find((element) => {
+        if (element.scrollHeight <= element.clientHeight + 2) return false;
+        const overflow = getComputedStyle(element).overflowY;
+        return overflow === "auto" || overflow === "scroll";
+      });
+      const current = questionArrowState.get(card);
+      if (body === undefined) {
+        if (current !== undefined) {
+          current.body.removeEventListener("scroll", current.handler);
+          current.button.remove();
+          questionArrowState.delete(card);
+        }
+        return;
+      }
+      if (current !== undefined && current.body === body && current.button.isConnected) {
+        current.update();
+        return;
+      }
+      if (current !== undefined) {
+        current.body.removeEventListener("scroll", current.handler);
+        current.button.remove();
+        questionArrowState.delete(card);
+      }
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "rdsh-mux-question-arrow";
+      button.setAttribute("data-rdsh-question-arrow", "");
+      button.setAttribute("aria-label", "Scroll question content down");
+      button.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6l5 5 5-5"/></svg>';
+      const update = () => {
+        const atEnd = body.scrollTop + body.clientHeight >= body.scrollHeight - 2;
+        const scrollable = body.scrollHeight > body.clientHeight + 2;
+        button.hidden = !scrollable || atEnd;
+        button.disabled = !scrollable || atEnd;
+      };
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        body.scrollBy({ top: Math.max(120, Math.round(body.clientHeight * 0.7)), behavior: "smooth" });
+      });
+      body.addEventListener("scroll", update, { passive: true });
+      card.append(button);
+      questionArrowState.set(card, { body, button, update, handler: update });
+      update();
+    }
+
     function decorateQuestionCards() {
+      const live = new Set();
       for (const card of document.querySelectorAll('[class*="_card"]')) {
         if (card.querySelector('[class*="_options"], [class*="_strip"]') === null) continue;
         card.setAttribute("data-rdsh-question-card", "");
         const frame = card.closest('[class*="_frame"]');
         if (frame !== null) frame.setAttribute("data-rdsh-question-frame", "");
+        for (const tile of card.querySelectorAll('[class*="_options"] > [class*="_option"], [class*="_options"] > [class*="_customRow"]')) {
+          tile.setAttribute("data-rdsh-question-tile", "");
+        }
+        decorateQuestionArrow(card);
+        live.add(card);
+      }
+      for (const [card, state] of questionArrowState) {
+        if (live.has(card)) continue;
+        state.body.removeEventListener("scroll", state.handler);
+        state.button.remove();
+        questionArrowState.delete(card);
       }
     }
 
     /**
-     * Make sure the viewport is edge-to-edge, without taking anything away.
+     * Pin the viewport exactly as the legacy plugin did.
      *
-     * This used to replace the tag with a fixed string, which dropped the
-     * host's `interactive-widget=resizes-content` (so the composer stopped
-     * riding above the keyboard) and banned pinch zoom, which is a WCAG 1.4.4
-     * problem. Now the tag is read, missing parts are added, and nothing is
-     * removed or overridden.
+     * This is the shipped contract: no pinch zoom, edge-to-edge, and the
+     * composer riding above the keyboard via the fixed string. The merged
+     * build had made this additive; the reference behaviour is the override.
+     * The 16px form fields (below, in the stylesheet) remain the zoom guard.
      */
     function enforceNoZoomViewport() {
       let meta = document.querySelector('meta[name="viewport"]');
@@ -2501,18 +2748,8 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         meta.setAttribute("name", "viewport");
         document.head.append(meta);
       }
-      const current = meta.getAttribute("content") ?? "";
-      // Parse the comma-separated directives; a key we do not set is left as
-      // the host wrote it.
-      const parts = current.split(",").map((part) => part.trim()).filter((part) => part !== "");
-      const has = (key) => parts.some((part) => part.split("=")[0].trim().toLowerCase() === key);
-      const wanted = [];
-      if (!has("width")) wanted.push("width=device-width");
-      if (!has("initial-scale")) wanted.push("initial-scale=1");
-      if (!has("viewport-fit")) wanted.push("viewport-fit=cover");
-      if (wanted.length === 0) return;
-      const next = [...parts, ...wanted].join(", ");
-      if (next !== current) meta.setAttribute("content", next);
+      const content = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
+      if (meta.getAttribute("content") !== content) meta.setAttribute("content", content);
     }
 
     const ACTIVITY_ICONS = {
@@ -2604,12 +2841,32 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       const nav = document.querySelector("nav.hHd-Xa_panelList");
       if (nav === null) return;
       // The account "More" row is not used on the phone.
-      const account = document.querySelector(ariaLabelSelector("button", "accountMenu", "Account menu"))
-        ?? [...document.querySelectorAll("button")].find((button) => button.innerText.trim() === "More");
+      //
+      // Never let the Settings row this function injects answer the account
+      // lookup. Its label is localized, and `COPY.ja` used to make it "設定",
+      // which is also one of PROBES.accountMenu. On the second decorate pass
+      // `querySelector` then returned the injected row, its parent nav was
+      // tagged `data-rdsh-more-row`, and the stylesheet hid the whole panel
+      // list (the four rows collapsed to 0x0).
+      const accountSelector = ariaLabelSelector("button", "accountMenu", "Account menu");
+      const isInjected = (element) => element.hasAttribute("data-rdsh-settings-row");
+      const account = [...document.querySelectorAll(accountSelector)].find((button) => !isInjected(button))
+        ?? [...document.querySelectorAll("button")].find((button) => !isInjected(button) && button.innerText.trim() === "More")
+        ?? null;
+      // Resolve the row that actually owns the account menu, and clear any
+      // stale tag from an earlier pass (including a nav tagged by the bug
+      // above) before writing the new one.
+      let moreRow = null;
       if (account !== null) {
-        const moreRow = account.closest('[class*="yHnPSG_anchor"]') ?? account.parentElement;
-        moreRow?.setAttribute("data-rdsh-more-row", "");
+        const candidate = account.closest('[class*="yHnPSG_anchor"]') ?? account.parentElement ?? null;
+        // The nav itself (or an ancestor containing it) is the panel list, not
+        // the account row; tagging it hides every panel row.
+        if (candidate !== null && candidate !== nav && !candidate.contains(nav)) moreRow = candidate;
       }
+      for (const tagged of document.querySelectorAll("[data-rdsh-more-row]")) {
+        if (tagged !== moreRow) tagged.removeAttribute("data-rdsh-more-row");
+      }
+      if (moreRow !== null) moreRow.setAttribute("data-rdsh-more-row", "");
       const auto = nav.querySelector('button[aria-label="Automation tasks"]');
       let row = nav.querySelector("[data-rdsh-settings-row]");
       if (row === null) {
@@ -2636,6 +2893,43 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       } else if (nav.lastElementChild !== row) {
         nav.append(row);
       }
+    }
+
+    /**
+     * Tag the drawer's own header toggle for the phone stylesheet.
+     *
+     * The reference styled that button through an upstream hash class. This
+     * package never names a hash: the sidebar slot bounds the search and the
+     * action label identifies the button, with the drag-header structure as
+     * the fallback for a localised label. Scoping to the sidebar keeps close,
+     * right-panel and composer buttons on their stock paint. A wide window
+     * drops the tag, so the stock control and its tooltip come back.
+     */
+    function decorateSidebarToggle() {
+      if (!narrow()) {
+        for (const element of document.querySelectorAll("[data-rdsh-sidebar-toggle]")) {
+          element.removeAttribute("data-rdsh-sidebar-toggle");
+        }
+        return;
+      }
+      const sidebar = document.querySelector('[data-slot="sidebar"]');
+      if (sidebar === null) return;
+      let toggle = sidebar.querySelector('button[aria-label="Open sidebar"], button[aria-label="Collapse sidebar"]');
+      if (toggle === null) {
+        // Localised label: the toggle is the only labelled button with a
+        // direct SVG icon in the sidebar's drag header (the brand button wraps
+        // its logo in a span).
+        for (const header of sidebar.querySelectorAll("[data-window-drag]")) {
+          toggle = [...header.querySelectorAll("button[aria-label]")]
+            .find((button) => button.querySelector(":scope > svg") !== null) ?? null;
+          if (toggle !== null) break;
+        }
+      }
+      if (toggle === null) return;
+      for (const element of document.querySelectorAll("[data-rdsh-sidebar-toggle]")) {
+        if (element !== toggle) element.removeAttribute("data-rdsh-sidebar-toggle");
+      }
+      toggle.setAttribute("data-rdsh-sidebar-toggle", "");
     }
 
     const ADD_LABEL = t("add.label");
@@ -2755,25 +3049,28 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       for (const slot of document.querySelectorAll('[data-slot="main.conversation"], [data-slot="conversation"]')) {
         slot.setAttribute("data-rdsh-conversation", "");
       }
-      // Session-row hooks are phone-only (their styling lives inside the phone
-      // query). Leaving them on a wide layout would also leave the attributes
-      // behind for the next narrow pass to mistake for its own.
-      if (narrow()) decorateSessionRows();
-      else if (rowHooksActive) clearSessionRowHooks();
+      // The reference decorates session rows at every width. Most hooks are
+      // spent by CSS inside the phone query, but the colour-frame hook is
+      // deliberately outside it: a desktop sidebar keeps showing the frame the
+      // user chose. Gating this on `narrow()` removed the hook and the frame.
+      decorateSessionRows();
+      decorateRouteHeading();
+      decorateQueueDock();
+      decorateWorkspacePicker();
       decorateComposer();
       decorateHeaderActivityChips();
       decorateSidebarSettingsRow();
+      decorateSidebarToggle();
       // The right panel keeps its chrome mounted even while closed (it is
       // clipped by a zero-width column), so presence of its buttons says
       // nothing. The dock strip is the real signal: it sits on-screen only
       // while the panel is open.
       const hideListDisabled = hideDisabled();
-      // #17: the attribute that hides upstream settings rows follows the
-      // device, not the window width. Its CSS therefore lives outside the
-      // phone media block (see the stylesheet).
+      // The hidden-rows attribute follows the same width contract as the list
+      // itself, so the JS writer and the stylesheet scope cannot drift apart.
       const onPhone = phone();
       if (onPhone !== state.phone) emit({ phone: onPhone });
-      document.documentElement.toggleAttribute("data-rdsh-hide-settings", !hideListDisabled && onPhone);
+      document.documentElement.toggleAttribute("data-rdsh-hide-settings", !hideListDisabled && narrow());
       applyHideList(hideListDisabled);
       maybeOpenSettings();
     }
@@ -2819,6 +3116,9 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       decorateTranscript();
       decorateUserBubbles();
       markScrollers();
+      // After decorateRightPanel so a just-tagged panel exists, and on the
+      // slow pass so a click cannot be issued on every mutation.
+      ensureRightPanelFits();
     }
 
     function decorate() {
@@ -2857,10 +3157,27 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
     function closeDrawer() {
       const frameElement = frame();
-      if (frameElement !== null && !frameElement.hasAttribute("data-sidebar-collapsed")) {
-        const collapse = document.querySelector('[aria-label="Collapse sidebar"]');
-        if (collapse !== null) collapse.click();
+      if (frameElement === null) {
+        // A full-screen route may not render the app frame at all. Reflect the
+        // closed state instead of leaving `data-rdsh-drawer="open"` behind for
+        // the next route (the FAB keys off this attribute).
+        document.documentElement.setAttribute("data-rdsh-drawer", "closed");
+        if (state.drawerOpen) emit({ drawerOpen: false });
+        scheduleDecorate();
+        return;
       }
+      if (!frameElement.hasAttribute("data-sidebar-collapsed")) {
+        const collapse = document.querySelector('[aria-label="Collapse sidebar"]');
+        if (collapse !== null) {
+          collapse.click();
+        } else {
+          // Route content replaced the sidebar chrome: there is nothing to
+          // click, so record the state the next decorate pass should show.
+          document.documentElement.setAttribute("data-rdsh-drawer", "closed");
+          if (state.drawerOpen) emit({ drawerOpen: false });
+        }
+      }
+      scheduleDecorate();
     }
 
     let currentSessionId = null;
@@ -2873,13 +3190,14 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
      * is never notified, and a narrow window silently changing that would be
      * the same width-based behaviour #17 removes.
      */
-    function markMobileSession() {
-      if (currentSessionId === null) return;
+    function markMobileSession(sessionId = currentSessionId) {
+      if (sessionId === null) return;
       if (!phone() && !notifyDeviceTurns()) return;
       void fetch(`${PUSH_API}/mobile-send`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sessionId: currentSessionId }),
+        // The host routes this turn's end back to the app that started it.
+        body: JSON.stringify({ sessionId, origin: location.origin }),
         keepalive: true,
       }).catch(() => {});
     }
@@ -3088,10 +3406,314 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       return control !== null && control !== undefined && control.closest('[data-row-key^="session:"]') !== null;
     }
 
+    // ---------------------------------------------------------------------
+    // Queued messages: attach the dock to the composer, preview the text, and
+    // offer the existing row actions from a long-press menu.
+    // ---------------------------------------------------------------------
+    let queuePress = null;
+    let queuePressTimer = 0;
+    let queueSuppressClickUntil = 0;
+    let queuePreview = null;
+    let queueMenu = null;
+    let queueDismiss = null;
+
+    function cancelQueuePressTimerOnly() {
+      if (queuePressTimer !== 0) {
+        clearTimeout(queuePressTimer);
+        queuePressTimer = 0;
+      }
+    }
+
+    function closeQueueUi() {
+      if (queuePressTimer !== 0) {
+        clearTimeout(queuePressTimer);
+        queuePressTimer = 0;
+      }
+      queuePress = null;
+      queuePreview?.remove();
+      queuePreview = null;
+      queueMenu?.remove();
+      queueMenu = null;
+      if (queueDismiss !== null) {
+        document.removeEventListener("pointerdown", queueDismiss.pointer, true);
+        document.removeEventListener("keydown", queueDismiss.key, true);
+        queueDismiss = null;
+      }
+    }
+
+    function closeQueuePreview() {
+      queuePreview?.remove();
+      queuePreview = null;
+      if (queueMenu === null && queueDismiss !== null) {
+        document.removeEventListener("pointerdown", queueDismiss.pointer, true);
+        document.removeEventListener("keydown", queueDismiss.key, true);
+        queueDismiss = null;
+      }
+    }
+
+    function closeQueueMenu() {
+      queueMenu?.remove();
+      queueMenu = null;
+      if (queuePreview === null && queueDismiss !== null) {
+        document.removeEventListener("pointerdown", queueDismiss.pointer, true);
+        document.removeEventListener("keydown", queueDismiss.key, true);
+        queueDismiss = null;
+      }
+    }
+
+    function queueRowAction(row, pattern) {
+      return [...row.querySelectorAll("button[aria-label]")]
+        .find((button) => pattern.test(button.getAttribute("aria-label") || "")) ?? null;
+    }
+
+    function queueMenuAt(row) {
+      closeQueueUi();
+      const preview = row.querySelector("[data-rdsh-queue-preview]");
+      const text = (preview?.getAttribute("data-rdsh-queue-text") || "").trim();
+      const menu = document.createElement("div");
+      menu.className = "rdsh-mux-queue-menu";
+      menu.setAttribute("role", "menu");
+      const items = [
+        { label: "Edit", pattern: /^Edit queued message$/i },
+        { label: "Send now", pattern: /^Steer queued message$/i },
+        { label: "Remove", pattern: /^Remove queued message$/i },
+      ];
+      for (const item of items) {
+        const action = queueRowAction(row, item.pattern);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.setAttribute("role", "menuitem");
+        button.textContent = item.label;
+        button.disabled = action === null || action.disabled === true || text === "";
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (action !== null && action.disabled !== true) action.click();
+          closeQueueUi();
+        });
+        menu.append(button);
+      }
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.setAttribute("role", "menuitem");
+      cancel.textContent = "Cancel";
+      cancel.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        closeQueueMenu();
+      });
+      menu.append(cancel);
+      document.body.append(menu);
+      const rect = row.getBoundingClientRect();
+      const width = Math.min(260, window.innerWidth - 24);
+      menu.style.width = `${width}px`;
+      menu.style.left = `${Math.round(Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)))}px`;
+      menu.style.top = `${Math.round(Math.max(12, rect.top - 8 - menu.getBoundingClientRect().height))}px`;
+      queueMenu = menu;
+      attachQueueDismiss();
+    }
+
+    function queuePreviewAt(preview) {
+      if (queuePreview !== null && queuePreview.getAttribute("data-rdsh-queue-for") === preview.getAttribute("data-rdsh-queue-for")) {
+        closeQueuePreview();
+        return;
+      }
+      closeQueueUi();
+      const row = preview.closest("[data-rdsh-queue-row]");
+      if (row === null) return;
+      const text = preview.getAttribute("data-rdsh-queue-text") || "";
+      const panel = document.createElement("div");
+      panel.className = "rdsh-mux-queue-preview";
+      panel.setAttribute("role", "dialog");
+      panel.setAttribute("aria-label", "Queued message preview");
+      panel.setAttribute("data-rdsh-queue-for", preview.getAttribute("data-rdsh-queue-for"));
+      panel.textContent = text;
+      document.body.append(panel);
+      const composer = document.querySelector("[data-rdsh-composer-root]");
+      const composerTop = composer === null ? window.innerHeight : composer.getBoundingClientRect().top;
+      const rowTop = row.getBoundingClientRect().top;
+      const bottom = Math.max(12, window.innerHeight - Math.min(composerTop, rowTop) + 8);
+      panel.style.bottom = `${Math.round(bottom)}px`;
+      queuePreview = panel;
+      attachQueueDismiss();
+    }
+
+    function attachQueueDismiss() {
+      if (queueDismiss !== null) return;
+      const pointer = (event) => {
+        if (queuePreview?.contains(event.target) || queueMenu?.contains(event.target)) return;
+        if (event.target.closest?.("[data-rdsh-queue-preview]") !== null && event.target.closest?.("[data-rdsh-queue-preview]") !== undefined) return;
+        closeQueueUi();
+      };
+      const key = (event) => {
+        if (event.key === "Escape") closeQueueUi();
+      };
+      queueDismiss = { pointer, key };
+      document.addEventListener("pointerdown", pointer, true);
+      document.addEventListener("keydown", key, true);
+    }
+
+    function cancelQueuePress() {
+      if (queuePressTimer !== 0) {
+        clearTimeout(queuePressTimer);
+        queuePressTimer = 0;
+      }
+      queuePress = null;
+    }
+
+    // ---------------------------------------------------------------------
+    // New-session workspace picker: search + a bounded scroll viewport, with
+    // the existing "Add workspace…" footer left outside the scroll area.
+    // ---------------------------------------------------------------------
+    let workspacePickerPending = false;
+    let workspacePickerState = null;
+
+    function clearWorkspacePicker() {
+      const state = workspacePickerState;
+      workspacePickerState = null;
+      workspacePickerPending = false;
+      if (state === null) return;
+      state.input.removeEventListener("keydown", state.keydown);
+      state.search.remove();
+      state.empty.remove();
+      for (const wrapper of state.wrappers) {
+        wrapper.removeAttribute("data-rdsh-workspace-hidden");
+      }
+      state.menu.removeAttribute("data-rdsh-workspace-menu");
+      state.viewport.removeAttribute("data-rdsh-workspace-viewport");
+    }
+
+    function workspacePickerMenu() {
+      for (const menu of document.querySelectorAll('[role="menu"]')) {
+        if (menu.getAttribute("data-rdsh-workspace-menu") === "" || workspacePickerPending) return menu;
+        const footer = [...menu.children].find((child) => {
+          const text = (child.textContent || "").trim();
+          return /Add\s+workspace/i.test(text) && (text.endsWith("…") || text.endsWith("..."));
+        });
+        if (footer !== undefined) return menu;
+      }
+      return null;
+    }
+
+    function decorateWorkspacePicker() {
+      if (!narrow()) {
+        clearWorkspacePicker();
+        return;
+      }
+      const menu = workspacePickerMenu();
+      if (menu === null) {
+        clearWorkspacePicker();
+        return;
+      }
+      if (workspacePickerState !== null && workspacePickerState.menu === menu) {
+        return;
+      }
+      clearWorkspacePicker();
+      const viewport = [...menu.children].find((child) => child.querySelector?.('button[role="menuitem"]') !== null && child.querySelector?.('button[role="menuitem"]') !== undefined);
+      if (viewport === undefined) {
+        workspacePickerPending = false;
+        return;
+      }
+      const wrappers = [...viewport.querySelectorAll('button[role="menuitem"]')].map((button) => button.parentElement ?? button);
+      const search = document.createElement("div");
+      search.className = "rdsh-mux-workspace-search";
+      search.setAttribute("data-rdsh-workspace-search", "");
+      const input = document.createElement("input");
+      input.type = "search";
+      input.placeholder = "Search workspaces";
+      input.setAttribute("aria-label", "Search workspaces");
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      search.append(input);
+      const empty = document.createElement("div");
+      empty.className = "rdsh-mux-workspace-empty";
+      empty.setAttribute("data-rdsh-workspace-empty", "");
+      empty.textContent = "No matches";
+      empty.hidden = true;
+      const apply = () => {
+        const query = input.value.trim().toLowerCase();
+        let shown = 0;
+        for (const wrapper of wrappers) {
+          const label = (wrapper.textContent || "").trim().toLowerCase();
+          const match = query === "" || label.includes(query);
+          wrapper.toggleAttribute("data-rdsh-workspace-hidden", !match);
+          if (match) shown += 1;
+        }
+        empty.hidden = shown !== 0;
+      };
+      const keydown = (event) => {
+        if (event.key !== "Escape") {
+          event.stopPropagation();
+          return;
+        }
+        if (input.value !== "") {
+          input.value = "";
+          apply();
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        // An empty search lets the trusted Escape bubble to the upstream menu
+        // close handler. Only a non-empty search is consumed here.
+        return;
+      };
+      input.addEventListener("input", apply);
+      input.addEventListener("keydown", keydown);
+      menu.insertBefore(search, menu.firstChild);
+      viewport.append(empty);
+      viewport.before(search);
+      menu.setAttribute("data-rdsh-workspace-menu", "");
+      viewport.setAttribute("data-rdsh-workspace-viewport", "");
+      workspacePickerState = { menu, viewport, wrappers, input, search, empty, keydown };
+      workspacePickerPending = false;
+      apply();
+      requestAnimationFrame(() => input.focus({ preventScroll: true }));
+    }
+
+    function decorateQueueDock() {
+      const dock = document.querySelector("[data-queue-dock]");
+      if (dock === null) {
+        if (queuePreview !== null || queueMenu !== null) closeQueueUi();
+        return;
+      }
+      dock.setAttribute("data-rdsh-queue-dock", "");
+      const panel = dock.querySelector('[class*="_panel"]');
+      if (panel !== null) panel.setAttribute("data-rdsh-queue-panel", "");
+      let index = 0;
+      for (const row of dock.querySelectorAll("li")) {
+        const preview = row.querySelector('[class*="_preview"]');
+        if (preview === null) continue;
+        row.setAttribute("data-rdsh-queue-row", "");
+        row.setAttribute("data-rdsh-queue-index", String(index));
+        const text = (preview.textContent || "").trim().replace(/\s+/g, " ");
+        preview.setAttribute("data-rdsh-queue-preview", "");
+        preview.setAttribute("data-rdsh-queue-for", String(index));
+        preview.setAttribute("data-rdsh-queue-text", text);
+        preview.setAttribute("title", text);
+        preview.setAttribute("tabindex", "0");
+        index += 1;
+      }
+    }
+
     function onPointerDown(event) {
       if (!narrow()) return;
       // xterm keeps its real input in a visually hidden textarea. Focusing it
       // from the tap/pointerdown gesture is what asks iOS for the keyboard.
+      const queuePreviewTarget = event.target.closest && event.target.closest("[data-rdsh-queue-preview]");
+      if (queuePreviewTarget !== null && queuePreviewTarget !== undefined && event.pointerType !== "mouse") {
+        queuePress = { preview: queuePreviewTarget, x: event.clientX, y: event.clientY, at: Date.now() };
+        cancelQueuePressTimerOnly();
+        queuePressTimer = setTimeout(() => {
+          queuePressTimer = 0;
+          const press = queuePress;
+          queuePress = null;
+          if (press === null) return;
+          queueSuppressClickUntil = Date.now() + 800;
+          const row = press.preview.closest("[data-rdsh-queue-row]");
+          if (row !== null) queueMenuAt(row);
+        }, LONG_PRESS_MS);
+        return;
+      }
       const terminal = event.target.closest && event.target.closest(".xterm, [class*='xterm']");
       if (terminal !== null) {
         const input = terminal.querySelector("textarea.xterm-helper-textarea, textarea");
@@ -3122,12 +3744,16 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
     /** Movement cancels the long press and leaves the drag to the app. */
     function onPointerMove(event) {
+      if (queuePress !== null && Math.abs(event.clientX - queuePress.x) + Math.abs(event.clientY - queuePress.y) > LONG_PRESS_SLOP_PX) {
+        cancelQueuePress();
+      }
       const candidate = tapCandidate;
       if (candidate === null || longPressTimer === 0) return;
       if (Math.abs(event.clientX - candidate.x) + Math.abs(event.clientY - candidate.y) > LONG_PRESS_SLOP_PX) cancelLongPress();
     }
 
     function onPointerUp(event) {
+      cancelQueuePress();
       cancelLongPress();
       const tabTap = tabCandidate;
       if (tabTap !== null) {
@@ -3221,11 +3847,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       const panelOpen = document.documentElement.hasAttribute("data-rdsh-rightpanel-open");
       // While the preview is open, a rightward swipe anywhere on it goes back
       // to the chat, the way a pushed iOS screen does. This is checked before
-      // the edge rules below, which would otherwise return first. The left
-      // 36px stays the drawer's: a swipe from there is the open-the-session-
-      // list gesture, and letting the preview eat it made the drawer
-      // unreachable whenever the preview happened to be open.
-      if (panelOpen && !drawerOpen && touch.clientX > 36) {
+      // the edge rules below, and it owns the left edge too: opening the
+      // drawer on top of the preview would stack two sheets. The drawer wins
+      // only once it is already open.
+      if (panelOpen && !drawerOpen) {
         if (target instanceof Element) {
           if (scrolledLeftAncestor(target) !== null) return;
           if (target.closest("input, textarea, [contenteditable=true], .xterm, [class*='xterm']") !== null) return;
@@ -3243,7 +3868,13 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         if (drawerOpen) return;
         if (touch.clientX > 36) return;
       }
-      if (target instanceof Element && target.closest("button, a, input, textarea, [role=button], [contenteditable=true]") !== null) return;
+      if (target instanceof Element) {
+        // Form fields always own the gesture. At the left edge a button may be
+        // the route's full-width row: a tap is still a tap (no movement means
+        // no preventDefault), while a rightward drag must open the drawer.
+        if (target.closest("input, textarea, [contenteditable=true]") !== null) return;
+        if (touch.clientX > 36 && target.closest("button, a, [role=button]") !== null) return;
+      }
       edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight };
     }
     function onEdgeSwipeMove(event) {
@@ -3257,21 +3888,30 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       const touch = event.touches[0];
       const dx = touch.clientX - edgeSwipe.x;
       const dy = touch.clientY - edgeSwipe.y;
+      // A vertical finger belongs to the list under it: drop the gesture and
+      // let the scroll proceed. Once the movement is clearly horizontal the
+      // page must not scroll, or opening the drawer also drags the session
+      // list (and the preview drags the content) under the finger.
+      if (Math.abs(dy) > Math.abs(dx)) {
+        if (Math.abs(dy) > 10) edgeSwipe = null;
+        return;
+      }
+      if (Math.abs(dx) > 4 && event.cancelable) event.preventDefault();
       if (edgeSwipe.closesPanel === true) {
-        if (dx < 64 || Math.abs(dy) > Math.abs(dx)) return;
+        if (dx < 64) return;
         edgeSwipe = null;
         if (event.cancelable) event.preventDefault();
         visibleCollapseButton()?.click();
         return;
       }
       if (edgeSwipe.fromRight) {
-        if (dx > -64 || Math.abs(dy) > Math.abs(dx)) return;
+        if (dx > -64) return;
         edgeSwipe = null;
         if (event.cancelable) event.preventDefault();
         document.querySelector('[aria-label="Open right sidebar"]')?.click();
         return;
       }
-      if (dx < 64 || Math.abs(dy) > Math.abs(dx)) return;
+      if (dx < 64) return;
       edgeSwipe = null;
       if (event.cancelable) event.preventDefault();
       toggleDrawer();
@@ -3286,6 +3926,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
      * so coordinates from the old layout cannot fire in the new one.
      */
     function resetGestures() {
+      cancelQueuePress();
       edgeSwipe = null;
       touchStart = null;
       terminalDrag = null;
@@ -3348,10 +3989,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
     }
 
     function onKeyDownCapture(event) {
-      // `narrow()` would be wrong here: a narrow desktop window still has a
-      // keyboard, and the stock composer sends on plain Enter. Only a finger
-      // primary pointer gets the phone default (Enter = newline).
-      const finger = coarsePointer();
+      // The legacy phone default follows the same width contract as the
+      // layout: a narrow window (mouse or finger) gets Enter = newline. A wide
+      // desktop stays stock unless the #15 opt-in is on.
+      const finger = phone();
       if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
       // Desktop stays out of the key path entirely unless the #15 opt-in is on.
       // When it is, the stock composer still owns the send; this only marks the
@@ -3542,8 +4183,19 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       item.click();
     }
 
+    /**
+     * The dismiss pair for the open detail popover, so closing always removes
+     * both listeners instead of leaving a closure on `document`.
+     */
+    let detailDismiss = null;
+
     function closeDetailPopover() {
       document.querySelector(".rdsh-mux-detail")?.remove();
+      if (detailDismiss !== null) {
+        document.removeEventListener("pointerdown", detailDismiss.pointer, true);
+        document.removeEventListener("keydown", detailDismiss.key, true);
+        detailDismiss = null;
+      }
     }
 
     function showDetailPopover(anchor, title, text, meta) {
@@ -3581,9 +4233,17 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       const dismiss = (event) => {
         if (!pop.contains(event.target)) closeDetailPopover();
       };
-      // `once` retires the listener on the first tap, so opening the popover
-      // repeatedly cannot stack handlers on document.
-      setTimeout(() => document.addEventListener("pointerdown", dismiss, { once: true }), 0);
+      const dismissKey = (event) => {
+        if (event.key === "Escape") closeDetailPopover();
+      };
+      // The listener stays until the popover is actually closed: retiring it
+      // on the first tap made an inside tap disable the outside dismissal.
+      setTimeout(() => {
+        if (!pop.isConnected) return;
+        detailDismiss = { pointer: dismiss, key: dismissKey };
+        document.addEventListener("pointerdown", dismiss, true);
+        document.addEventListener("keydown", dismissKey, true);
+      }, 0);
     }
 
     function showTitlePopover(crumbs) {
@@ -3624,6 +4284,21 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       return newSessionPattern.test(button.getAttribute("aria-label") || "");
     }
 
+    /**
+     * A sidebar row that opens a full-screen route.
+     *
+     * Plugins and Automation tasks replace the chat with their own screen; the
+     * phone drawer must not stay over that screen. New Session, session rows
+     * and Settings are handled separately.
+     */
+    const PANEL_ROUTE_PATTERN = /^(?:Plugins|Automation tasks)$/i;
+
+    function isPanelRouteButton(target) {
+      const button = target.closest("button[aria-label]");
+      if (button === null) return false;
+      return PANEL_ROUTE_PATTERN.test(button.getAttribute("aria-label") || "");
+    }
+
     function onClickCapture(event) {
       const target = event.target;
       if (target === null || target.closest === undefined) return;
@@ -3631,6 +4306,28 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       // The app delivered the tab click itself; the replay must stay cancelled.
       if (tabCandidate !== null && target.closest("[data-rdsh-rtab]") === tabCandidate.tab) tabCandidate.fired = true;
 
+      // Workspace picker: remember that the next visible menu is the
+      // new-session workspace chooser, then decorate it with search.
+      if (target.closest && target.closest('[aria-label="Choose workspace"]') !== null) {
+        const trigger = target.closest('[data-rdsh-workspace-trigger], [aria-label="Choose workspace"]');
+        if (trigger !== null) trigger.setAttribute("data-rdsh-workspace-trigger", "");
+        workspacePickerPending = true;
+        scheduleDecorate();
+      }
+      // Queued message: tap toggles the full-text preview. The native row still
+      // owns its edit/remove/steer buttons; this branch only wraps the preview.
+      const queuePreviewTarget = target.closest && target.closest("[data-rdsh-queue-preview]");
+      if (queuePreviewTarget !== null && queuePreviewTarget !== undefined) {
+        if (Date.now() < queueSuppressClickUntil) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        queuePreviewAt(queuePreviewTarget);
+        return;
+      }
       // xterm's helper textarea is the actual input; a click gesture focusing it
       // asks iOS to show the keyboard.
       if (narrow()) {
@@ -3688,6 +4385,15 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       // closes just as it does for a tapped session row. Match by label, not
       // by hashed class; a session row never carries one of these buttons.
       if (narrow() && isNewSessionButton(target)) {
+        setTimeout(closeDrawer, 0);
+        return;
+      }
+
+      // Plugins / Automation tasks open a full-screen route. Close the drawer
+      // after the app has handled the click, so the route is not left under an
+      // open drawer (and the FAB comes back). A desktop sidebar is never
+      // touched: this branch is width-gated.
+      if (narrow() && isPanelRouteButton(target)) {
         setTimeout(closeDrawer, 0);
         return;
       }
@@ -4311,7 +5017,25 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       };
     }
 
+    /**
+     * Tell the push host which deployed origin this page is.
+     *
+     * The host keeps a separate subscription store for every origin that has
+     * talked to it. After a process restart that set is empty, and an empty
+     * origin filter means "every stored subscription" (the old 8444 and the
+     * current 8446 devices would both receive the same question). A boot-time
+     * `/config` request is enough: its guard records `location.origin` without
+     * changing any notification setting.
+     */
+    let pushOriginNoted = false;
+    function notePushOrigin() {
+      if (pushOriginNoted) return;
+      pushOriginNoted = true;
+      void fetch(`${PUSH_API}/config`, { cache: "no-store" }).catch(() => {});
+    }
+
     async function refreshNotificationStatus() {
+      notePushOrigin();
       emit({ notifications: await notificationStatus() });
     }
 
@@ -4765,9 +5489,27 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       const [extra, setExtra] = useState(readHideExtra().join("\n"));
       const [sound, setSound] = useState(readSoundPreset);
       const [volume, setVolume] = useState(readSoundVolume);
+      const [metrics, setMetrics] = useState(readViewportMetrics);
+      const [scrollTick, setScrollTick] = useState(0);
 
       useEffect(() => {
         void refreshNotificationStatus();
+      }, []);
+
+      useEffect(() => {
+        const refresh = () => setMetrics(readViewportMetrics());
+        const viewport = window.visualViewport;
+        viewport?.addEventListener("resize", refresh);
+        viewport?.addEventListener("scroll", refresh);
+        window.addEventListener("resize", refresh);
+        window.addEventListener("orientationchange", refresh);
+        refresh();
+        return () => {
+          viewport?.removeEventListener("resize", refresh);
+          viewport?.removeEventListener("scroll", refresh);
+          window.removeEventListener("resize", refresh);
+          window.removeEventListener("orientationchange", refresh);
+        };
       }, []);
 
       const run = async (action, success) => {
@@ -4958,6 +5700,85 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
           h("p", { className: "rdsh-mux-note" }, t("mux.note.notifyScope")),
           message !== "" ? h("p", { className: "rdsh-mux-note" }, message) : null,
         ),
+        h(
+          "div",
+          { className: "rdsh-mux-card" },
+          h("h3", { className: "rdsh-mux-title" }, t("mux.diag.height.title")),
+          h("p", { className: "rdsh-mux-desc" }, t("mux.diag.height.desc")),
+          h(
+            "dl",
+            { className: "rdsh-mux-rows" },
+            h("dt", null, t("mux.diag.screenHeight")),
+            h("dd", null, String(metrics.screenHeight)),
+            h("dt", null, t("mux.diag.innerHeight")),
+            h("dd", null, String(metrics.innerHeight)),
+            h("dt", null, t("mux.diag.clientHeight")),
+            h("dd", null, String(metrics.clientHeight)),
+            h("dt", null, t("mux.diag.visualViewport")),
+            h("dd", null, t("mux.diag.visualValue", { height: metrics.visualHeight, offset: metrics.visualOffset })),
+            h("dt", null, t("mux.diag.gap")),
+            h("dd", null, metrics.gap === null ? "—" : `${metrics.gap}px`),
+            h("dt", null, t("mux.diag.standalone")),
+            h("dd", null, metrics.standalone ? t("mux.diag.yes") : t("mux.diag.no")),
+            h("dt", null, t("mux.diag.safeArea")),
+            h("dd", null, t("mux.diag.safeValue", { top: metrics.safeTop, bottom: metrics.safeBottom })),
+            h("dt", null, t("mux.diag.nativeGap")),
+            h("dd", null, metrics.nativeGap ? t("mux.diag.nativeGap.yes") : t("mux.diag.nativeGap.no")),
+          ),
+          h("p", { className: "rdsh-mux-note" }, t("mux.diag.height.note")),
+          h(
+            "div",
+            { className: "rdsh-mux-actions" },
+            h("button", { type: "button", onClick: () => setMetrics(readViewportMetrics()) }, t("mux.diag.reMeasure")),
+          ),
+        ),
+        h(
+          "div",
+          { className: "rdsh-mux-card", "data-scroll-tick": scrollTick },
+          h("h3", { className: "rdsh-mux-title" }, t("mux.diag.scroll.title")),
+          h("p", { className: "rdsh-mux-desc" }, t("mux.diag.scroll.desc")),
+          h(
+            "div",
+            { className: "rdsh-mux-actions" },
+            h("button", {
+              type: "button",
+              onClick: () => {
+                lastScrolls.length = 0;
+                setScrollTick((value) => value + 1);
+              },
+            }, t("mux.diag.scroll.clear")),
+            h("button", { type: "button", onClick: () => setScrollTick((value) => value + 1) }, t("mux.diag.scroll.refresh")),
+          ),
+          h("p", { className: "rdsh-mux-label" }, t("mux.diag.scroll.last")),
+          lastScrolls.length === 0
+            ? h("p", { className: "rdsh-mux-note" }, t("mux.diag.scroll.empty"))
+            : h("ul", { className: "rdsh-mux-scroll-list" },
+              lastScrolls.slice(-6).reverse().map((entry, index) => h(
+                "li",
+                { key: `${entry.at}:${index}` },
+                t("mux.diag.scroll.lastItem", {
+                  tag: entry.tag,
+                  cls: entry.cls || t("mux.diag.noClass"),
+                  top: entry.scrollTop,
+                  overflow: entry.overflowY,
+                }),
+              )),
+            ),
+          h("p", { className: "rdsh-mux-label" }, t("mux.diag.scroll.scrollable")),
+          h("ul", { className: "rdsh-mux-scroll-list" },
+            scrollables().slice(0, 8).map((entry, index) => h(
+              "li",
+              { key: `${entry.cls}:${index}` },
+              t("mux.diag.scroll.scrollableItem", {
+                tag: entry.tag,
+                cls: entry.cls || t("mux.diag.noClass"),
+                top: entry.scrollTop,
+                height: entry.scrollHeight,
+                overflow: entry.overflowY,
+              }),
+            )),
+          ),
+        ),
         onPhone
           ? h(
             "div",
@@ -5106,13 +5927,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
   display: none; pointer-events: none;
 }
 .rdsh-mux-fab-badge[data-visible] { display: block; }
-/* Phones only. A colour frame is a phone affordance (it stands in for the
-   sidebar's activity dot while the drawer is closed); on a wide screen the
-   stock sidebar already shows the session's state. */
-@media ${NARROW_QUERY} {
-  [data-rdsh-session-frame] {
-    box-shadow: inset 0 0 0 2px var(--rdsh-session-frame) !important;
-  }
+/* The session colour frame is part of the plugin's desktop surface too: the
+   legacy build painted it outside the phone query. */
+[data-rdsh-session-frame] {
+  box-shadow: inset 0 0 0 2px var(--rdsh-session-frame) !important;
 }
 .rdsh-frame-menu-item {
   width: 100%; display: flex; align-items: center; gap: 10px;
@@ -5146,10 +5964,10 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 
 .rdsh-mux-backdrop {
   position: fixed; inset: 0; z-index: 45; display: none;
-  /* A light dim so the drawer reads as the active surface. No fade: the
-     dimming is a state change, and fading it looked like a second sheet
-     sliding in behind the drawer. */
-  background: var(--dsw-alias-bg-mask-1, rgba(0,0,0,.24)); opacity: 0; pointer-events: none;
+  /* The reference dim (rgba(0,0,0,.35)), not a theme token whose alpha can
+     drift with the palette. No fade: the dimming is a state change, and
+     fading it looked like a second sheet sliding in behind the drawer. */
+  background: rgba(0,0,0,.35); opacity: 0; pointer-events: none;
 }
 
 .rdsh-mux-detail {
@@ -5348,6 +6166,13 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
 .rdsh-mux-chip { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--dsw-alias-bg-module-platform, #353638); color: var(--dsw-alias-label-secondary, #cfd3d6); }
 .rdsh-mux-check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .rdsh-mux-label { font-size: 12px; font-weight: 600; margin-bottom: 4px; color: var(--dsw-alias-label-secondary, #cfd3d6); }
+.rdsh-mux-scroll-list {
+  margin: 0; padding-left: 16px;
+  display: flex; flex-direction: column; gap: 3px;
+  font-size: 12px; line-height: 1.5;
+  color: var(--dsw-alias-label-secondary, #cfd3d6);
+}
+.rdsh-mux-scroll-list li { overflow-wrap: anywhere; }
 .rdsh-mux-textarea {
   box-sizing: border-box; width: 100%; font: inherit; font-size: 13px; padding: 6px 8px;
   border-radius: 8px; resize: vertical;
@@ -5410,7 +6235,7 @@ html[data-rdsh-anim="breathing"] [data-rdsh-running] [data-rdsh-session-title] {
 html[data-rdsh-anim="outline"] [data-rdsh-running] [data-rdsh-session-title]::before,
 html[data-rdsh-anim="outline"] [data-rdsh-running] [data-rdsh-session-title]::after { display: none !important; }
 html[data-rdsh-anim="outline"] [data-rdsh-ring-row] {
-  --rdsh-ring-fill: var(--dsw-specific-sidebar-nav-item-hover, #f1f3f5);
+  --rdsh-ring-fill: #1b1b1c;
   position: relative !important;
   isolation: isolate;
   overflow: hidden;
@@ -5427,14 +6252,14 @@ html[data-rdsh-anim="outline"] [data-rdsh-ring-row]::before {
   z-index: 0;
   background: conic-gradient(
     from 0deg,
-    transparent 0deg,
-    transparent 215deg,
-    color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 14%, transparent) 235deg,
-    color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 68%, transparent) 268deg,
-    var(--dsw-alias-link, #7aaaff) 292deg,
-    color-mix(in srgb, var(--dsw-alias-link, #7aaaff) 30%, transparent) 315deg,
-    transparent 336deg,
-    transparent 360deg
+    rgba(122,170,255,0) 0deg,
+    rgba(122,170,255,0) 215deg,
+    rgba(122,170,255,.14) 235deg,
+    rgba(140,185,255,.68) 268deg,
+    #cfe0ff 292deg,
+    rgba(122,170,255,.3) 315deg,
+    rgba(122,170,255,0) 336deg,
+    rgba(122,170,255,0) 360deg
   );
   transform: translate(-50%, -50%) rotate(0deg);
   animation: rdsh-ring-rotate 2.8s linear infinite;
@@ -5455,23 +6280,23 @@ html[data-rdsh-anim="outline"] [data-rdsh-ring-row] > * {
 }
 /* Yellow only while a running session is also the open one. */
 html[data-rdsh-anim="outline"] [data-rdsh-ring-row][aria-selected="true"] {
-  --rdsh-ring-fill: var(--dsw-specific-sidebar-nav-item-active, #ebeef2);
+  --rdsh-ring-fill: #2d2d2e;
 }
 html[data-rdsh-anim="outline"] [data-rdsh-ring-row][aria-selected="true"]::before {
   background: conic-gradient(
     from 0deg,
-    transparent 0deg,
-    transparent 215deg,
-    color-mix(in srgb, var(--dsw-alias-state-warn-primary, #ffd166) 14%, transparent) 235deg,
-    color-mix(in srgb, var(--dsw-alias-state-warn-primary, #ffd166) 68%, transparent) 268deg,
-    color-mix(in srgb, var(--dsw-alias-state-warn-primary, #ffd166) 45%, var(--dsw-alias-label-primary, #f9fafb)) 292deg,
-    color-mix(in srgb, var(--dsw-alias-state-warn-primary, #ffd166) 30%, transparent) 315deg,
-    transparent 336deg,
-    transparent 360deg
+    rgba(255,209,102,0) 0deg,
+    rgba(255,209,102,0) 215deg,
+    rgba(255,209,102,.14) 235deg,
+    rgba(255,224,130,.68) 268deg,
+    #fff3c4 292deg,
+    rgba(255,209,102,.3) 315deg,
+    rgba(255,209,102,0) 336deg,
+    rgba(255,209,102,0) 360deg
   );
 }
 html[data-rdsh-anim="outline"] [data-rdsh-ring-row]:hover:not([aria-selected="true"]) {
-  --rdsh-ring-fill: var(--dsw-specific-sidebar-nav-item-hover, #f1f3f5);
+  --rdsh-ring-fill: #242425;
 }
 html[data-rdsh-anim="outline"] [data-rdsh-ring-row]:not([data-rdsh-session-frame]) {
   box-shadow: none !important;
@@ -5479,12 +6304,12 @@ html[data-rdsh-anim="outline"] [data-rdsh-ring-row]:not([data-rdsh-session-frame
 /* An idle session that is merely open: a plain frame and a slightly lighter
    fill, with no sweep, so "open" and "working" stay distinguishable. */
 html[data-rdsh-anim="outline"] [data-rdsh-open-row]:not([data-rdsh-ring-row]) {
-  background: var(--dsw-specific-sidebar-nav-item-active, #ebeef2) !important;
-  box-shadow: inset 0 0 0 1px var(--dsw-alias-border-l4, rgba(0,0,0,.16)) !important;
+  background: #232324 !important;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.2) !important;
   border-radius: 12px !important;
 }
 html[data-rdsh-anim="outline"] [data-rdsh-open-row]:not([data-rdsh-ring-row]):hover {
-  background: var(--dsw-specific-sidebar-nav-item-hover, #f1f3f5) !important;
+  background: #29292b !important;
 }
 /* A row with a user-chosen colour frame keeps that frame: only the fill moves. */
 html[data-rdsh-anim="outline"] [data-rdsh-open-row][data-rdsh-session-frame]:not([data-rdsh-ring-row]) {
@@ -5667,11 +6492,25 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
      it from being the only separation. */
   html[data-rdsh-drawer="open"] [data-rdsh-sidebar] {
     transform: translateX(0);
-    box-shadow: var(--dsw-elevation-prominent, 24px 0 56px rgba(0,0,0,.35));
+    box-shadow: 24px 0 56px rgba(0,0,0,.5);
   }
   html[data-rdsh-drawer="open"] .rdsh-mux-backdrop { display: block; opacity: 1; pointer-events: auto; }
   .rdsh-mux-fab { display: flex; }
   html[data-rdsh-drawer="open"] .rdsh-mux-fab { display: none; }
+
+  /* The drawer's own header toggle is the app's icon button, not a dialog
+     close. The reference paints it label-primary in every pointer state and
+     drops the sticky hover tint, the Android tap flash and the delayed
+     tooltip. The hook is written only inside this width query (and removed
+     when the window widens), so a desktop gets the stock control back. */
+  [data-rdsh-sidebar-toggle],
+  [data-rdsh-sidebar-toggle]:is(:hover, :active, :focus) {
+    color: var(--dsw-alias-label-primary) !important;
+    background: transparent !important;
+    -webkit-tap-highlight-color: transparent;
+  }
+  [data-rdsh-sidebar-toggle] * { -webkit-tap-highlight-color: transparent; }
+  html:has([data-rdsh-sidebar-toggle]:is(:hover, :focus)) [role="tooltip"] { display: none !important; }
 
 
   /* The account row in the sidebar footer is replaced by the settings row
@@ -5734,6 +6573,14 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
   [data-rdsh-transcript] {
     padding-left: 16px !important;
     padding-right: 16px !important;
+  }
+  /* The legacy transcript column: a fixed 349px reading measure, centred.
+     max-width: 100% keeps it inside viewports narrower than 349px. */
+  [data-rdsh-transcript-column] {
+    width: 349px !important;
+    max-width: 100% !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
   }
   /* Keep the reasoning effort (Max etc.) visible; only the model name shrinks. */
   [data-rdsh-model-button] [class*="triggerLabel"] {
@@ -5798,6 +6645,11 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
      used to come from rdsh-mobile-ui, so a profile without that plugin drew
      the session name straight through the button. */
   [data-rdsh-header] { padding-left: 64px !important; }
+  /* Full-screen routes (Plugins / Automation tasks) draw their own H1 at the
+     page's 24px gutter. Move only that heading, not the row's right-side
+     actions: margin affects the H1 box, while the wrapper's other children
+     keep their position. */
+  [data-rdsh-route-heading] > h1 { margin-left: 40px !important; }
   [data-rdsh-header] [class*="_titleCluster"] { min-width: 0; flex: 1 1 auto; }
   /* Pin the activity chips to the right edge of the header. Without this the
      actions block sits directly after the title, so a short session name drags
@@ -6015,18 +6867,127 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
   [class*="_7KE1Ra_cell"] > span:last-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   [data-rdsh-model-search]:disabled { opacity: 1 !important; cursor: text; }
 
-  /* Agent question / plan review card: it lives in the composer seat, which
-     already carries the 16px gutter, so it just fills that box. It used to be
-     pinned to 349px — a copy of the transcript's old fixed column — which left
-     it narrower than the composer on every phone and off-centre on tablets. */
+  /* Agent question / plan review card: use the same 16px gutter and 349px
+     column as the transcript, centred. max-width: 349px rather than a fixed
+     width keeps it inside a viewport narrower than 349px. */
   [data-rdsh-question-frame] {
+    /* The card is sized from the viewport, not the transcript's 349px
+       column: 16px on each side is the same gutter as the composer. */
+    box-sizing: border-box !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    justify-content: flex-start !important;
     padding-left: 16px !important; padding-right: 16px !important;
     padding-bottom: 10px !important;
+    overflow-x: visible !important;
   }
   [data-rdsh-question-frame] > [data-rdsh-question-card] {
-    width: 100% !important; max-width: 100% !important;
-    /* The card's own 10px bottom padding doubled the footer's. */
-    padding-bottom: 0 !important;
+    flex: 0 0 auto !important;
+    position: relative !important;
+    width: calc(100vw - 32px) !important;
+    max-width: calc(100vw - 32px) !important;
+    margin-left: 0 !important; margin-right: 0 !important;
+  }
+  /* Each option row is a tile: a hairline plus a radius separates the rows
+     without changing their hit area or padding. */
+  [data-rdsh-question-card] [data-rdsh-question-tile] {
+    border: .5px solid var(--dsw-alias-border-l2, rgba(255,255,255,.16)) !important;
+    border-radius: 10px !important;
+    background: var(--dsw-alias-bg-module-platform, rgba(255,255,255,.02));
+  }
+  [data-rdsh-question-card] [class*="_options"] { gap: 6px !important; }
+  /* A down chevron bubble for a scrollable question body. It follows the
+     Settings-tab arrow look, but sits over the card and disappears at the
+     end of the scroll. */
+  [data-rdsh-question-arrow] {
+    position: absolute !important;
+    right: 12px; bottom: 56px; z-index: 6;
+    width: 30px; height: 30px; padding: 0;
+    display: grid; place-items: center;
+    border: .5px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12));
+    border-radius: 50%;
+    background: var(--dsw-alias-button-floating-fill, #fff);
+    color: var(--dsw-alias-label-primary, #1b1b1d);
+    box-shadow: var(--dsw-shadow-lv2, 0 2px 8px rgba(0,0,0,.18));
+    opacity: .78; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: opacity .12s ease, transform .12s ease;
+  }
+  [data-rdsh-question-arrow]:hover,
+  [data-rdsh-question-arrow]:focus-visible { opacity: 1; transform: scale(1.04); }
+  [data-rdsh-question-arrow]:active { transform: scale(.94); }
+  [data-rdsh-question-arrow][hidden] { display: none !important; }
+  [data-rdsh-question-arrow] svg { width: 15px; height: 15px; }
+  /* Queue dock: match the composer card's width and sit flush on its top
+     edge. The panel has a top radius only; its bottom is the composer. */
+  [data-rdsh-queue-dock] {
+    width: calc(100% - 32px) !important;
+    max-width: none !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    margin-bottom: -6px !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+  }
+  [data-rdsh-queue-panel] {
+    border-bottom-left-radius: 0 !important;
+    border-bottom-right-radius: 0 !important;
+  }
+  .rdsh-mux-queue-preview {
+    position: fixed; left: 16px; right: 16px; z-index: 985;
+    box-sizing: border-box; padding: 12px 14px;
+    max-height: min(50vh, 360px); overflow-y: auto;
+    border: .5px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12));
+    border-radius: 12px;
+    background: var(--dsw-alias-bg-layer-2, #2c2c2e);
+    color: var(--dsw-alias-label-primary, #f9fafb);
+    box-shadow: var(--dsw-elevation-prominent, 0 12px 32px rgba(0,0,0,.35));
+    font-size: 14px; line-height: 1.55;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+    -webkit-overflow-scrolling: touch;
+  }
+  .rdsh-mux-queue-menu {
+    position: fixed; z-index: 990; box-sizing: border-box;
+    display: flex; flex-direction: column; gap: 1px; padding: 6px;
+    border: .5px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12));
+    border-radius: 12px;
+    background: var(--dsw-alias-bg-layer-2, #2c2c2e);
+    color: var(--dsw-alias-label-primary, #f9fafb);
+    box-shadow: var(--dsw-elevation-prominent, 0 12px 32px rgba(0,0,0,.35));
+  }
+  .rdsh-mux-queue-menu button {
+    width: 100%; min-height: 38px; padding: 6px 10px;
+    border: 0; border-radius: 8px; background: transparent;
+    color: inherit; font: inherit; font-size: 13px; text-align: left;
+  }
+  .rdsh-mux-queue-menu button:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(255,255,255,.08)); }
+  .rdsh-mux-queue-menu button:disabled { opacity: .45; }
+  /* New-session workspace picker: a search row, a bounded item viewport and
+     the upstream Add workspace footer outside that viewport. */
+  [data-rdsh-workspace-menu] { max-height: min(70vh, 520px) !important; overflow: hidden !important; }
+  [data-rdsh-workspace-menu] [data-rdsh-workspace-viewport] {
+    max-height: min(40vh, 320px) !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  [data-rdsh-workspace-menu] [data-rdsh-workspace-hidden] { display: none !important; }
+  .rdsh-mux-workspace-search {
+    flex: none; box-sizing: border-box; padding: 8px 10px;
+    border-bottom: .5px solid var(--dsw-alias-border-l1, rgba(255,255,255,.1));
+    background: var(--dsw-alias-bg-layer-2, #2c2c2e);
+  }
+  .rdsh-mux-workspace-search input {
+    box-sizing: border-box; width: 100%; height: 34px;
+    padding: 0 10px; border-radius: 8px;
+    border: .5px solid var(--dsw-alias-border-l3, rgba(255,255,255,.16));
+    background: var(--dsw-alias-bg-base, #1b1b1d);
+    color: var(--dsw-alias-label-primary, #f9fafb);
+    font: inherit; font-size: 16px;
+  }
+  .rdsh-mux-workspace-empty {
+    padding: 14px 12px; color: var(--dsw-alias-label-tertiary, #adb2b8);
+    font-size: 13px;
   }
   /* Direct children only. [class*="_header"] also matches _headerActions,
      [class*="_footer"] matches _footerActions and [class*="_option"] matches
@@ -6092,37 +7053,9 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
   [data-rdsh-rightpanel] pre { max-width: 100%; }
 
   /* Right panel tabs (dockkit's file/preview strip).
-     Upstream builds them for a mouse: 28px tall, with touch-action:none (which
-     makes the strip unscrollable by finger, so tabs past the right edge are
-     unreachable), and a drag threshold of 4px on every pointerdown, which
-     turns an ordinary tap into a tab drag. Give the row a finger-sized height,
-     let a tap stay a tap, and let the strip pan sideways. Drag-and-drop of tabs
-     is therefore mouse-only; nothing in this layout needs it. */
-  [data-rdsh-rightpanel] [data-dockkit-tab] {
-    height: 44px !important;
-    min-width: 88px !important;
-    max-width: 58vw !important;
-    touch-action: manipulation !important;
-  }
-  [data-rdsh-rightpanel] [data-dockkit-strip] { min-height: 52px; }
-  [data-rdsh-rightpanel] [data-dockkit-strip-tabs] {
-    touch-action: pan-x !important;
-    scroll-behavior: auto !important;
-    -webkit-overflow-scrolling: touch;
-  }
-  /* The close button is hover-only upstream; a phone has no hover, so it took
-     the top-right of the tap target without ever being visible. Show it on the
-     selected tab only, and keep it out of the tab's own tap area. */
-  [data-rdsh-rightpanel] [data-dockkit-tab-close] { display: none !important; }
-  [data-rdsh-rightpanel] [data-dockkit-tab][aria-selected="true"] [data-dockkit-tab-close] {
-    display: flex !important;
-    opacity: 1 !important;
-    pointer-events: auto !important;
-  }
-  /* Selected tab needs to read as selected without the hover colour shift. */
-  [data-rdsh-rtab][aria-selected="true"] {
-    box-shadow: inset 0 -2px 0 var(--dsw-alias-brand-primary-new-color, #4d6bfe);
-  }
+     The reference build leaves their dimensions and hover affordances to
+     upstream (28px rows, hover-only close). The tap replay in the pointer
+     handlers is kept, but it must not restyle the tab strip. */
 
   /* Code files: wrap every line, including a single long token (URLs,
      minified lines). Wrapping only at spaces left those overflowing, which
@@ -6144,6 +7077,12 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
   /* Wrapping is forced above, so the viewer's own toggle no longer changes
      anything. Hide it rather than leave a control that does nothing. */
   [data-rdsh-rightpanel] [data-textpreview-tool="wrap"] { display: none !important; }
+
+  /* Two controls in the panel header duplicate what the phone already is or
+     cannot do: "Exit fullscreen" closes the panel exactly like the ✕ next to
+     it, and "Split" needs width the phone does not have. Keep only the ✕. */
+  [data-rdsh-rightpanel] [aria-label="Exit fullscreen"],
+  [data-rdsh-rightpanel] [aria-label="Split"] { display: none !important; }
 
   /* The native strip already contains the home indicator. */
   html[data-rdsh-native-gap] [data-rdsh-sidebar],
@@ -6182,6 +7121,7 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
         document.addEventListener("pointermove", onPointerMove, true);
         document.addEventListener("focusout", onModelFocusOut, true);
         document.addEventListener("pointerup", onPointerUp, true);
+        document.addEventListener("pointercancel", cancelQueuePress, true);
         document.addEventListener("mousedown", onMouseDownCapture, true);
         document.addEventListener("click", onClickCapture, true);
         // Window capture runs before the app's document-level key adapter. That
@@ -6196,17 +7136,23 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
         if (bootSession !== "") requestSession(bootSession);
         document.addEventListener("touchstart", onTouchStart, { capture: true, passive: true });
         document.addEventListener("touchmove", onTouchMove, { capture: true, passive: false });
+        document.addEventListener("scroll", recordScroll, true);
         measureSafeArea();
         // A rotation changes both the query and the geometry, and iOS reports
-        // the new safe-area insets a frame or two after the event. Re-measure,
-        // forget the gestures that were in flight, and decorate twice: once
-        // now (so the drawer/button state follows the new width) and once
-        // after the transition has settled.
+        // the new safe-area insets a frame or two after the event. Re-measure
+        // and decorate twice: once now (so the drawer/button state follows the
+        // new width) and once after the transition has settled.
+        //
+        // Gestures are dropped only when the width really changed, on
+        // orientationchange, or when the phone layout is left. A keyboard or a
+        // collapsing URL bar changes the height alone and must not cancel a
+        // swipe that is already in flight; the legacy handler did not reset at
+        // all.
         let rotationTimer = 0;
-        const onResize = () => {
+        let gestureWidth = window.innerWidth;
+        const onLayoutResize = () => {
           // Do not close the attach sheet here: opening it blurs the composer,
           // and the resulting keyboard-close resize would remove it instantly.
-          resetGestures();
           measureSafeArea();
           scheduleDecorate();
           clearTimeout(rotationTimer);
@@ -6215,12 +7161,25 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
             scheduleDecorate();
           }, 350);
         };
+        const onResize = () => {
+          if (window.innerWidth !== gestureWidth) {
+            gestureWidth = window.innerWidth;
+            resetGestures();
+          }
+          onLayoutResize();
+        };
+        const onOrientation = () => {
+          gestureWidth = window.innerWidth;
+          resetGestures();
+          onLayoutResize();
+        };
         window.addEventListener("resize", onResize);
-        window.addEventListener("orientationchange", onResize);
+        window.addEventListener("orientationchange", onOrientation);
         // The visual viewport reports the keyboard and the rotation's own
         // resize; without it an iPhone keyboard can leave the layout sized for
-        // the covered viewport.
-        window.visualViewport?.addEventListener("resize", onResize);
+        // the covered viewport. It must not reset gestures: it fires for
+        // height-only changes during a swipe.
+        window.visualViewport?.addEventListener("resize", onLayoutResize);
         patchCommandUi(ctx);
         document.addEventListener("dragstart", onDragStartCapture, true);
         document.addEventListener("dragend", onDragEndCapture, true);
@@ -6240,21 +7199,13 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
         const media = window.matchMedia(NARROW_QUERY);
         const onMedia = () => {
           emit({ narrow: media.matches, phone: phone() });
-          if (!media.matches) clearPhoneHooks();
+          if (!media.matches) {
+            resetGestures();
+            clearPhoneHooks();
+          }
           scheduleDecorate();
         };
         media.addEventListener("change", onMedia);
-        // #17: the device predicate can change without a width change (a
-        // tablet switching to a keyboard, a window entering fullscreen), and
-        // the settings UI has to follow it.
-        const coarseMedia = window.matchMedia(COARSE_QUERY);
-        const onPointerKind = () => {
-          emit({ phone: phone() });
-          scheduleDecorate();
-        };
-        coarseMedia.addEventListener("change", onPointerKind);
-        const anyCoarseMedia = window.matchMedia(ANY_COARSE_QUERY);
-        anyCoarseMedia.addEventListener("change", onPointerKind);
 
         scheduleDecorate();
         void refreshNotificationStatus();
@@ -6267,11 +7218,17 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
           writeDeviceTheme,
           applyDeviceTheme,
           build: BUILD,
+          lang: currentLang(),
+          get lastScrolls() { return [...lastScrolls]; },
+          scrollables,
+          scrollChain,
+          readViewportMetrics,
           autoSettings: true,
           decorate: scheduleDecorate,
-          // Diagnostics used by the unit tests: the device predicate is the
-          // #17 fix, so it must be observable without a browser.
+          // Diagnostics used by the unit tests: the layout predicate and the
+          // restored scroll hooks have to be observable without a browser.
           phone,
+          markMobileSession,
           closeDrawer,
           openDrawer: toggleDrawer,
           enableNotifications,
@@ -6279,54 +7236,64 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
         };
 
         return () => {
-          observer.disconnect();
-          document.removeEventListener("pointerdown", onPointerDown, true);
-          document.removeEventListener("pointerup", onPointerUp, true);
-          document.removeEventListener("mousedown", onMouseDownCapture, true);
-          document.removeEventListener("click", onClickCapture, true);
-          window.removeEventListener("keydown", onKeyDownCapture, true);
-          document.removeEventListener("touchstart", onTouchStart, true);
-          document.removeEventListener("touchmove", onTouchMove, true);
-          window.removeEventListener("resize", onResize);
-          window.removeEventListener("orientationchange", onResize);
-          window.visualViewport?.removeEventListener("resize", onResize);
-          clearTimeout(rotationTimer);
-          document.removeEventListener("dragstart", onDragStartCapture, true);
-          document.removeEventListener("dragend", onDragEndCapture, true);
-          document.removeEventListener("dblclick", onSessionTitleDoubleClick, true);
-          document.removeEventListener("contextmenu", onSessionContextMenu, true);
-          document.removeEventListener("touchstart", onEdgeSwipeStart, true);
-          document.removeEventListener("touchmove", onEdgeSwipeMove, true);
-          document.removeEventListener("touchend", onEdgeSwipeEnd, true);
-          document.removeEventListener("touchcancel", onEdgeSwipeEnd, true);
-          document.removeEventListener("keydown", onKeyDown);
-          document.removeEventListener("pointerdown", onFocusPointer, true);
-          document.removeEventListener("focusin", onFocusInGuard, true);
-          // Added at boot alongside the rest; without these two a re-mount
-          // leaves the previous closure listening on every pointer move.
-          document.removeEventListener("pointermove", onPointerMove, true);
-          document.removeEventListener("focusout", onModelFocusOut, true);
-          media.removeEventListener("change", onMedia);
-          coarseMedia.removeEventListener("change", onPointerKind);
-          displayMedia.removeEventListener("change", onPointerKind);
-          style.remove();
-          rightPanelWatch?.disconnect();
-          rightPanelIO?.disconnect();
-          rightPanelWatch = null;
-          rightPanelIO = null;
-          rightPanelNode = null;
-          settingsArrows?.left.remove();
-          settingsArrows?.right.remove();
-          settingsArrows = null;
-          document.documentElement.removeAttribute("data-rdsh-rightpanel-open");
-          document.documentElement.removeAttribute("data-rdsh-anim");
-          fab?.remove();
-          backdrop?.remove();
-          fab = null;
-          backdrop = null;
-          delete globalThis.__RDSH_MOBILE_UX__;
-          navigator.serviceWorker?.removeEventListener("message", onWorkerMessage);
-          booted = false;
+          try {
+            observer.disconnect();
+            document.removeEventListener("pointerdown", onPointerDown, true);
+            document.removeEventListener("pointerup", onPointerUp, true);
+            document.removeEventListener("pointercancel", cancelQueuePress, true);
+            document.removeEventListener("mousedown", onMouseDownCapture, true);
+            document.removeEventListener("click", onClickCapture, true);
+            window.removeEventListener("keydown", onKeyDownCapture, true);
+            document.removeEventListener("touchstart", onTouchStart, true);
+            document.removeEventListener("touchmove", onTouchMove, true);
+            document.removeEventListener("scroll", recordScroll, true);
+            window.removeEventListener("resize", onResize);
+            window.removeEventListener("orientationchange", onOrientation);
+            window.visualViewport?.removeEventListener("resize", onLayoutResize);
+            clearTimeout(rotationTimer);
+            document.removeEventListener("dragstart", onDragStartCapture, true);
+            document.removeEventListener("dragend", onDragEndCapture, true);
+            document.removeEventListener("dblclick", onSessionTitleDoubleClick, true);
+            document.removeEventListener("contextmenu", onSessionContextMenu, true);
+            document.removeEventListener("touchstart", onEdgeSwipeStart, true);
+            document.removeEventListener("touchmove", onEdgeSwipeMove, true);
+            document.removeEventListener("touchend", onEdgeSwipeEnd, true);
+            document.removeEventListener("touchcancel", onEdgeSwipeEnd, true);
+            document.removeEventListener("keydown", onKeyDown);
+            document.removeEventListener("pointerdown", onFocusPointer, true);
+            document.removeEventListener("focusin", onFocusInGuard, true);
+            // Added at boot alongside the rest; without these two a re-mount
+            // leaves the previous closure listening on every pointer move.
+            document.removeEventListener("pointermove", onPointerMove, true);
+            document.removeEventListener("focusout", onModelFocusOut, true);
+            media.removeEventListener("change", onMedia);
+            closeDetailPopover();
+            clearQuestionArrows();
+            closeQueueUi();
+            clearWorkspacePicker();
+            rightPanelFitPending = false;
+            style.remove();
+            rightPanelWatch?.disconnect();
+            rightPanelIO?.disconnect();
+            rightPanelWatch = null;
+            rightPanelIO = null;
+            rightPanelNode = null;
+            settingsArrows?.left.remove();
+            settingsArrows?.right.remove();
+            settingsArrows = null;
+            document.documentElement.removeAttribute("data-rdsh-rightpanel-open");
+            document.documentElement.removeAttribute("data-rdsh-anim");
+            fab?.remove();
+            backdrop?.remove();
+            fab = null;
+            backdrop = null;
+            delete globalThis.__RDSH_MOBILE_UX__;
+            navigator.serviceWorker?.removeEventListener("message", onWorkerMessage);
+          } finally {
+            // Even a failed teardown must leave the module bootable again; the
+            // next apply then rebuilds every listener from scratch.
+            booted = false;
+          }
         };
       }, "rdsh-mobile-ux: phone layout");
     }
@@ -6507,11 +7474,28 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
       inject: ["slots"],
       apply(ctx) {
         // Order matters only for the one that touches the session menu: the id
-        // copy row registers into its own slot, so any order works. Keep the
-        // list readable.
-        const parts = [pwaPart(), mobilePart(), sessionIdCopyPart()];
-        for (const part of parts) {
-          if (part !== null && typeof part === "object" && typeof part.apply === "function") part.apply(ctx);
+        // copy row registers into its own slot, so any order works. Each part
+        // is built and applied behind its own guard: one broken half must not
+        // take the other two down with it.
+        const factories = [
+          ["pwa", pwaPart],
+          ["mobile-ux", mobilePart],
+          ["session-id-copy", sessionIdCopyPart],
+        ];
+        for (const [name, factory] of factories) {
+          let part;
+          try {
+            part = factory();
+          } catch (error) {
+            console.error(`[rdsh-pwa] ${name} client half failed to build`, error);
+            continue;
+          }
+          if (part === null || typeof part !== "object" || typeof part.apply !== "function") continue;
+          try {
+            part.apply(ctx);
+          } catch (error) {
+            console.error(`[rdsh-pwa] ${name} client half failed to apply`, error);
+          }
         }
       },
     };

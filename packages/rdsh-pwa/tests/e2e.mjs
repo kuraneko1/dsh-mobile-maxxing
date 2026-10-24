@@ -191,36 +191,45 @@ async function checkRuntime() {
 
 	await cdp.send("Network.emulateNetworkConditions", { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
 	await cdp.send("Page.reload");
-	await sleep(4000);
-	const offline = await cdp.eval(`(() => ({
-		title: document.title,
-		offline: globalThis.__RDSH_PWA__ ? globalThis.__RDSH_PWA__.state.offline : null,
-		pill: document.querySelector('.rdsh-pwa-pill') ? document.querySelector('.rdsh-pwa-pill').textContent : null,
-		root: !!document.getElementById('root'),
-	}))()`);
+	// The offline pill is rendered by a later effect; polling keeps this
+	// assertion strict while avoiding a fixed-delay race on a slow machine.
+	let offline = null;
+	for (let attempt = 0; attempt < 40; attempt += 1) {
+		offline = await cdp.eval(`(() => ({
+			title: document.title,
+			offline: globalThis.__RDSH_PWA__ ? globalThis.__RDSH_PWA__.state.offline : null,
+			pill: document.querySelector('.rdsh-pwa-pill') ? document.querySelector('.rdsh-pwa-pill').textContent : null,
+			root: !!document.getElementById('root'),
+		}))()`);
+		if (offline.pill !== null) break;
+		await sleep(250);
+	}
 	check("an offline reload still serves the app shell", offline.title === "DeepSeek Harness" && offline.root === true, offline);
 	// Text is localised, so assert the element rendered rather than its wording.
-	check("offline state is visible", typeof offline.pill === "string" && offline.pill.length > 0, offline.pill);
+	check("offline state is visible", typeof offline.pill === "string" && offline.pill.length > 0, offline);
 	await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
 
-	// #17: width alone must not hide DSH's own UI. Device metrics keep the
-	// pointer `fine`, which is exactly a desktop window resized (or split).
-	// 683px used to hide the settings rows and the "+" commands; 1440px never
-	// did, so both are checked against the same expectation.
+	// The legacy contract is the width alone: 683px (<=767) is the phone
+	// layout even with a fine pointer, so it does hide phone-only controls;
+	// 1440px stays stock. This is the contract the unified build restored.
 	for (const width of [683, 1440]) {
 		await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: false });
 		await cdp.send("Page.reload");
 		await sleep(2500);
-		const desktop = await cdp.eval(`(() => ({
+		const view = await cdp.eval(`(() => ({
 			width: window.innerWidth,
+			narrow: matchMedia('(max-width: 767px)').matches,
 			phone: globalThis.__RDSH_MOBILE_UX__ ? globalThis.__RDSH_MOBILE_UX__.phone() : null,
 			hideSettings: document.documentElement.hasAttribute('data-rdsh-hide-settings'),
 			hidden: document.querySelectorAll('[data-rdsh-hidden], [data-rdsh-setting-hidden]').length,
 		}))()`);
+		const expected = width <= 767
+			? view.narrow === true && view.phone === true && view.hideSettings === true
+			: view.narrow === false && view.phone === false && view.hideSettings === false && view.hidden === 0;
 		check(
-			`a ${width}x900 desktop window hides no controls`,
-			desktop.phone === false && desktop.hideSettings === false && desktop.hidden === 0,
-			desktop,
+			`a ${width}x900 window follows the width contract`,
+			expected,
+			view,
 		);
 	}
 

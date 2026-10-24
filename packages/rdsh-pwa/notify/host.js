@@ -461,13 +461,17 @@ export class PushStore {
 	 * Every live subscription, as stored right now.
 	 *
 	 * @param {object} [filter] - `{ origins }`: keep only these origins (plus
-	 *   entries written before the origin was recorded).
+	 *   entries written before the origin was recorded). `{ exactOrigins: true }`
+	 *   drops those legacy entries and matches only the named origins.
 	 * @returns {object[]} matching subscriptions.
 	 */
 	subscriptions(filter) {
 		this.reload();
 		const origins = filter?.origins;
 		if (!Array.isArray(origins) || origins.length === 0) return this.state.subscriptions;
+		if (filter?.exactOrigins === true) {
+			return this.state.subscriptions.filter((item) => typeof item.origin === "string" && origins.includes(item.origin));
+		}
 		return this.state.subscriptions.filter((item) => typeof item.origin !== "string" || item.origin === "" || origins.includes(item.origin));
 	}
 
@@ -606,8 +610,10 @@ export function applyNotify(ctx, config) {
 	const copy = normalizeNotifyConfig(config);
 	/** Sessions whose next turn was started from the phone. One-shot. */
 	const mobileSendAt = new Map();
-	/** Whether the turn now running in a session came from the phone. */
+	/** The turn now running in a session: `{ fromPhone, origin }`. */
 	const turnMobile = new Map();
+	/** The origin that most recently started a turn in a session. */
+	const lastTurnOrigin = new Map();
 
 	/**
 	 * The public origins this process has served.
@@ -621,7 +627,26 @@ export function applyNotify(ctx, config) {
 	 */
 	const ownOrigins = new Set();
 
-	/** Remember the origin a request came from. */
+	/** The first usable origin on a request: Origin, body.origin, then Referer. */
+	function requestOrigin(req, body) {
+		const candidates = [
+			req?.headers?.origin,
+			typeof body?.origin === "string" ? body.origin : undefined,
+			req?.headers?.referer,
+		];
+		for (const candidate of candidates) {
+			if (typeof candidate !== "string" || candidate === "") continue;
+			try {
+				const origin = new URL(candidate).origin;
+				if (origin !== "null") return origin;
+			} catch {
+				/* a malformed header is not worth failing the request over */
+			}
+		}
+		return "";
+	}
+
+	/** Remember every origin a request came from. */
 	function noteOrigin(req, body) {
 		const candidates = [
 			req?.headers?.origin,
@@ -639,10 +664,25 @@ export function applyNotify(ctx, config) {
 		}
 	}
 
-	/** Send one payload to every stored subscription, pruning dead ones. */
-	async function fanOut(payload) {
-		const subscriptions = store.subscriptions({ origins: [...ownOrigins] });
-		if (subscriptions.length === 0) return { ok: true, results: [] };
+	/**
+	 * Send one payload to the subscriptions this event belongs to.
+	 *
+	 * Priority:
+	 *   1. an explicit target origin (the app that started the turn or asked
+	 *      for the test) — exact match only;
+	 *   2. otherwise the origins this process has learned from requests;
+	 *   3. otherwise the historical all-subscriptions fallback.
+	 *
+	 * @param {object} payload - push payload.
+	 * @param {object} [target] - `{ origin }` for an exact origin.
+	 * @returns {Promise<object>} per-subscription results.
+	 */
+	async function fanOut(payload, target = {}) {
+		const requestedOrigin = typeof target.origin === "string" ? target.origin.trim() : "";
+		const subscriptions = requestedOrigin !== ""
+			? store.subscriptions({ origins: [requestedOrigin], exactOrigins: true })
+			: store.subscriptions({ origins: [...ownOrigins] });
+		if (subscriptions.length === 0) return { ok: true, results: [], targetOrigin: requestedOrigin };
 		const subject = store.subject(copy.subject);
 		const results = [];
 		for (const subscription of subscriptions) {
@@ -654,21 +694,25 @@ export function applyNotify(ctx, config) {
 				results.push({ status: 0, ok: false, error: String(error?.message ?? error) });
 			}
 		}
-		return { ok: results.some((item) => item.ok), subject, results };
+		return { ok: results.some((item) => item.ok), subject, results, targetOrigin: requestedOrigin };
 	}
 
 	ctx.inject(["agents"], (agentCtx) => {
 		const agents = agentCtx.get("agents");
 		agentCtx.on("session/event", (session, event) => {
 			if (event?.type === "turn/start") {
-				const at = mobileSendAt.get(session.id);
-				const fromPhone = at !== undefined && Date.now() - at < 10 * 60 * 1000;
-				if (at !== undefined) mobileSendAt.delete(session.id);
-				turnMobile.set(session.id, fromPhone);
+				const pending = mobileSendAt.get(session.id);
+				const fromPhone = pending !== undefined && Date.now() - pending.at < 10 * 60 * 1000;
+				if (pending !== undefined) mobileSendAt.delete(session.id);
+				const origin = fromPhone ? (pending.origin || "") : "";
+				turnMobile.set(session.id, { fromPhone, origin });
+				if (origin !== "") lastTurnOrigin.set(session.id, origin);
 				return;
 			}
 			if (event?.type !== "turn/end") return;
-			const fromPhone = turnMobile.get(session.id) === true;
+			const turn = turnMobile.get(session.id);
+			const fromPhone = turn?.fromPhone === true;
+			const origin = turn?.origin || "";
 			turnMobile.delete(session.id);
 			if (copy.onlyMobileTurns && !fromPhone) return;
 			// Root sessions only: a subagent finishing is not news.
@@ -678,7 +722,7 @@ export function applyNotify(ctx, config) {
 				copy,
 				lang: copy.lang,
 				session: sessionNameOf(ctx, session),
-			})).catch((error) => {
+			}), { origin }).catch((error) => {
 				console.error("[rdsh-pwa] turn-end push failed", error);
 			});
 		});
@@ -688,11 +732,14 @@ export function applyNotify(ctx, config) {
 			const agent = typeof id === "string" ? agents?.get(id) : undefined;
 			if (agent !== undefined && agents.roots().includes(agent)) {
 				const asking = request?.agent?.session;
+				// Prefer the origin that most recently started a turn in this
+				// session; otherwise fanOut falls back to ownOrigins and then all.
+				const origin = typeof id === "string" ? (lastTurnOrigin.get(id) || "") : "";
 				void fanOut(buildQuestionPayload(request, {
 					copy,
 					lang: copy.lang,
 					session: asking === undefined ? "" : sessionNameOf(ctx, asking),
-				})).catch((error) => {
+				}), { origin }).catch((error) => {
 					console.error("[rdsh-pwa] question push failed", error);
 				});
 			}
@@ -702,6 +749,18 @@ export function applyNotify(ctx, config) {
 
 	ctx.inject(["connection", "webServer"], (routeCtx) => {
 		const connection = routeCtx.connection;
+		// A restart has not seen a request yet. Adopt webServer.getOrigin()
+		// only when it exactly matches an already stored subscription origin;
+		// an internal origin behind --public-url would otherwise filter every
+		// push out. No guess is made when it does not match.
+		try {
+			const serverOrigin = new URL(routeCtx.webServer.getOrigin()).origin;
+			if (serverOrigin !== "null" && store.subscriptions().some((item) => item.origin === serverOrigin)) {
+				ownOrigins.add(serverOrigin);
+			}
+		} catch {
+			/* no getOrigin or an unusable value: keep request-derived origins */
+		}
 		const json = (res, status, value) => {
 			res.writeHead(status, {
 				"content-type": "application/json; charset=utf-8",
@@ -785,7 +844,9 @@ export function applyNotify(ctx, config) {
 						return;
 					}
 					const body = await readJsonBody(req);
-					if (typeof body.sessionId === "string" && body.sessionId !== "") mobileSendAt.set(body.sessionId, Date.now());
+					if (typeof body.sessionId === "string" && body.sessionId !== "") {
+						mobileSendAt.set(body.sessionId, { at: Date.now(), origin: requestOrigin(req, body) });
+					}
 					json(res, 200, { ok: true });
 				},
 			},
@@ -836,7 +897,7 @@ export function applyNotify(ctx, config) {
 						"test",
 						strings["notify.testTitle"],
 						strings["notify.testPayloadBody"],
-					));
+					), { origin: requestOrigin(req, body) });
 					json(res, 200, { ok: result.ok, ...result, count: store.subscriptions().length });
 				},
 			},

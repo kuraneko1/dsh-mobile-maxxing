@@ -65,7 +65,7 @@ ln -sfn /path/to/dsh-mobile-maxxing/packages/rdsh-pwa ~/.dsh/profiles/web/node_m
 ## 開発
 
 ```sh
-npm test     # ブラウザ不要のテスト88件（うち2件はスキップ）
+npm test     # ブラウザ不要のテスト114件
 ```
 
 ビルド工程はありません。`client.js` はブラウザにそのまま配信され、`index.js` は Node
@@ -134,7 +134,7 @@ ln -sfn /path/to/dsh-mobile-maxxing/packages/rdsh-pwa ~/.dsh/profiles/web/node_m
 ## Development
 
 ```sh
-npm test     # 88 tests, no browser required (2 are skipped)
+npm test     # 114 tests, no browser required
 ```
 
 There is no build step: `client.js` is served verbatim and `index.js` uses only Node

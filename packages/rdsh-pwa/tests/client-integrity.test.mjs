@@ -10,7 +10,7 @@
  */
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
 
 const CLIENT = readFileSync(new URL("../client.js", import.meta.url), "utf8");
@@ -200,24 +200,38 @@ test("the context meter reads the projection instead of opening the popover", ()
 	assert.match(meter, /pressureTokens/, "the same numerator the upstream panel uses");
 });
 
-test("the transcript keeps its column tag on every pass", () => {
+test("the transcript keeps its column tag and the reference 349px measure", () => {
 	// #14: the tag itself sets the 16px gutters, so the "24px or more"
 	// heuristic can never hold again — a second decorate dropped the column.
 	const body = helperBody("decorateTranscript");
 	assert.match(body, /hasAttribute\("data-rdsh-transcript"\)/, "an already tagged node short-circuits the heuristic");
 	assert.match(body, /data-rdsh-transcript-column/);
+	// The reference column is a fixed, centred 349px reading measure. The
+	// 100% conversation rules may not erase it.
+	assert.match(CLIENT, /\[data-rdsh-transcript-column\] \{\s*\n\s*width: 349px !important;/, "the 349px column is gone");
+	assert.match(CLIENT, /\[data-rdsh-transcript-column\] \{[^}]*max-width: 100% !important;/, "a narrow viewport can overflow");
+	assert.match(CLIENT, /\[data-rdsh-transcript-column\] \{[^}]*margin-left: auto !important;/, "the column is not centred");
 });
 
-test("the question card fills the composer gutter and pads only its own children", () => {
-	// #8: 349px was the transcript's old fixed column, and partial class
-	// matches (`_option` → `_optionCopy`, `_footer` → `_footerActions`) stacked
-	// the same padding four levels deep.
-	assert.equal(/width:\s*349px/.test(CLIENT), false, "no fixed column width is left");
-	assert.match(CLIENT, /\[data-rdsh-question-frame\] > \[data-rdsh-question-card\] \{[^}]*max-width: 100% !important/);
-	assert.match(CLIENT, /\[data-rdsh-question-card\] > \[class\*="_header"\]/);
-	assert.match(CLIENT, /\[data-rdsh-question-card\] > \[class\*="_footer"\]/);
-	assert.equal(/\[data-rdsh-question-card\] \[class\*="_footer"\]/.test(CLIENT), false, "the descendant selector is gone");
-	assert.equal(/\[data-rdsh-question-card\] \[class\*="_option"\]/.test(CLIENT), false, "the ambiguous option selector is gone");
+test("the question card uses the composer's 16px viewport gutters", () => {
+	// The card is no longer pinned to the transcript's 349px column: on a
+	// phone it is viewport - 32px so both edges sit 16px from the screen. The
+	// frame spans the seat, box-sizing keeps its own padding from enlarging it,
+	// and flex must not shrink the card back to the content width.
+	assert.match(
+		CLIENT,
+		/\[data-rdsh-question-frame\] \{[^}]*box-sizing: border-box !important;[^}]*width: 100% !important;[^}]*max-width: 100% !important;[^}]*justify-content: flex-start !important;[^}]*padding-left: 16px !important; padding-right: 16px !important;/,
+		"the question frame no longer spans the seat with a 16px gutter",
+	);
+	assert.match(
+		CLIENT,
+		/\[data-rdsh-question-frame\] > \[data-rdsh-question-card\] \{[^}]*flex: 0 0 auto !important;[^}]*width: calc\(100vw - 32px\) !important;[^}]*max-width: calc\(100vw - 32px\) !important;[^}]*margin-left: 0 !important; margin-right: 0 !important;/,
+		"the card is not viewport - 32px with zero auto margins",
+	);
+	assert.match(CLIENT, /\[data-rdsh-question-card\] > \[class\*="_header"\]/, "the direct-child header padding is gone");
+	assert.match(CLIENT, /\[data-rdsh-question-card\] > \[class\*="_footer"\]/, "the direct-child footer padding is gone");
+	assert.equal(/\[data-rdsh-question-card\] \[class\*="_footer"\]/.test(CLIENT), false, "the descendant selector is back");
+	assert.equal(/\[data-rdsh-question-card\] \[class\*="_option"\]/.test(CLIENT), false, "the ambiguous option selector is back");
 	assert.match(CLIENT, /\[class\*="_field"\] > \* \{ font-size: 16px/, "the answer mirror and the textarea share the font");
 });
 
@@ -288,14 +302,15 @@ test("upstream hooks are styled only inside the phone query", () => {
 	// previews were darkened and cropped. Those rules used to sit outside the
 	// media block. The safe-area rules are the only exception: they key off
 	// `env()` values, which are zero on a desktop. The hide-list rules are the
-	// second: their attributes are only written while the phone predicate
-	// holds, so the attribute itself is the gate (#17); another test asserts
-	// that the writer uses it.
+	// second: their attribute is only written at phone width, so the attribute
+	// itself is the gate. The session colour frame is the third: the reference
+	// build paints it on desktop too.
 	const allow = [
 		/^html\[data-rdsh-safe-(top|bottom|left|right)\]/,
 		/^html\[data-rdsh-native-gap\]/,
 		/^html\[data-rdsh-pwa=/,
 		/^html\[data-rdsh-hide-settings\]/,
+		/^\[data-rdsh-session-frame\]$/,
 	];
 	const phone = (at) => at.some((head) => /max-width:\s*767px/.test(head));
 	const leaked = [];
@@ -308,18 +323,25 @@ test("upstream hooks are styled only inside the phone query", () => {
 		}
 	}
 	assert.deepEqual(leaked, [], "styled outside the phone query");
+	// The drawer header toggle: every pointer state is label-primary on a
+	// transparent background, no Android tap flash, and no delayed tooltip.
+	assert.match(
+		CLIENT,
+		/\[data-rdsh-sidebar-toggle\],\s*\n\s*\[data-rdsh-sidebar-toggle\]:is\(:hover, :active, :focus\) \{\s*\n\s*color: var\(--dsw-alias-label-primary\) !important;\s*\n\s*background: transparent !important;/,
+		"the drawer header toggle does not follow the reference paint",
+	);
+	assert.match(CLIENT, /\[data-rdsh-sidebar-toggle\] \* \{ -webkit-tap-highlight-color: transparent; \}/, "the toggle children keep the tap flash");
+	assert.match(CLIENT, /html:has\(\[data-rdsh-sidebar-toggle\]:is\(:hover, :focus\)\) \[role="tooltip"\] \{ display: none !important; \}/, "the toggle tooltip is not suppressed");
 });
 
-test("the phone query covers a landscape phone", () => {
-	// `(max-width: 767px)` alone drops an 844x390 phone into the desktop
-	// layout: no drawer button, no swipe, stock rail. Both halves and both
-	// stylesheets have to agree.
+test("the phone query is the legacy width-only contract", () => {
+	// The reference plugin treats everything at or below 767px as a phone,
+	// in either orientation. A landscape 844px phone stays in the desktop
+	// layout, because that is what the reference build does.
 	const definitions = [...CLIENT.matchAll(/const NARROW_QUERY = "([^"]+)";/g)].map((match) => match[1]);
 	assert.equal(definitions.length, 2, "one definition per half");
 	for (const definition of definitions) {
-		assert.match(definition, /max-width: 767px/, "the portrait rule is gone");
-		assert.match(definition, /orientation: landscape/, "a landscape phone is still a phone");
-		assert.match(definition, /pointer: coarse/, "a narrow desktop window is not a phone");
+		assert.equal(definition, "(max-width: 767px)", "the query gained an orientation or pointer clause");
 	}
 	assert.equal(
 		(CLIENT.match(/@media \(max-width: 767px\)/g) ?? []).length,
@@ -328,14 +350,14 @@ test("the phone query covers a landscape phone", () => {
 	);
 });
 
-test("Enter keeps its desktop behaviour", () => {
+test("Enter follows the phone width, as in the reference build", () => {
 	// The phone default (Enter inserts a newline) is the opposite of the stock
-	// composer. Gating that on width killed Enter-to-send for anyone with a
-	// narrow desktop window, so the guard keys off the pointer instead.
+	// composer. The reference gated it on width only, so a narrow desktop
+	// window gets the phone behaviour too.
 	const head = functionHead("onKeyDownCapture", 1200);
-	assert.match(head, /const finger = coarsePointer\(\);/, "onKeyDownCapture no longer asks about the pointer");
-	assert.match(head, /if \(!finger && !notifyDeviceTurns\(\)\) return;/, "a desktop only enters the key path for the #15 opt-in");
-	assert.doesNotMatch(stripLiterals(head), /narrow\s*\(/, "a narrow desktop window would lose Enter");
+	assert.match(head, /const finger = phone\(\);/, "onKeyDownCapture no longer asks about the layout");
+	assert.match(head, /if \(!finger && !notifyDeviceTurns\(\)\) return;/, "a wide desktop only enters the key path for the #15 opt-in");
+	assert.doesNotMatch(stripLiterals(head), /coarsePointer\s*\(/, "a narrow fine pointer would lose the phone default");
 });
 
 test("panel-wide decorations stay off the desktop", () => {
@@ -345,7 +367,7 @@ test("panel-wide decorations stay off the desktop", () => {
 	assert.match(functionHead("decorateLightbox", 400), /if \(!narrow\(\)\) return;/, "decorateLightbox is not phone-gated");
 });
 
-test("leaving the phone layout removes its hooks", () => {
+test("leaving the phone layout removes its hooks, while desktop frames stay", () => {
 	// Attributes survive a resize on their own: the stylesheet stops applying
 	// but the DOM keeps claiming a row is running, and the header title keeps
 	// a hook whose sheen no longer exists.
@@ -353,10 +375,18 @@ test("leaving the phone layout removes its hooks", () => {
 	assert.match(CLIENT, /function clearPhoneHooks\(\)/, "no header/typing cleanup");
 	assert.match(
 		CLIENT,
-		/if \(narrow\(\)\) decorateSessionRows\(\);\s*\n\s*else if \(rowHooksActive\) clearSessionRowHooks\(\)/,
-		"rows are decorated off the phone",
+		/if \(!media\.matches\) \{\s*\n\s*resetGestures\(\);\s*\n\s*clearPhoneHooks\(\);/,
+		"a resize to desktop keeps the phone hooks",
 	);
-	assert.match(CLIENT, /const onMedia = \(\) => \{\s*\n\s*emit\(\{ narrow: media\.matches, phone: phone\(\) \}\);\s*\n\s*if \(!media\.matches\) clearPhoneHooks\(\);/, "a resize to desktop keeps the phone hooks");
+	assert.match(CLIENT, /"data-rdsh-sidebar-toggle"/, "the sidebar toggle tag is not cleaned up");
+	const toggle = functionHead("decorateSidebarToggle", 1700);
+	assert.match(toggle, /if \(!narrow\(\)\)/, "the sidebar toggle is tagged on a desktop");
+	assert.match(toggle, /\[data-slot="sidebar"\]/, "the sidebar toggle search is not bounded by its slot");
+	assert.match(toggle, /button\[aria-label="Open sidebar"\], button\[aria-label="Collapse sidebar"\]/, "the toggle action label is not used");
+	// The reference decorates rows at every width, so the desktop colour frame
+	// exists as a hook and is painted by a rule outside the phone query.
+	assert.match(CLIENT, /^\s+decorateSessionRows\(\);\s*$/m, "session rows are no longer decorated on desktop");
+	assert.match(CLIENT, /^\[data-rdsh-session-frame\] \{\s*\n\s*box-shadow: inset 0 0 0 2px var\(--rdsh-session-frame\) !important;/m, "the frame hook has no desktop style");
 });
 
 test("the live-speed poller only runs on a phone", () => {
@@ -365,21 +395,25 @@ test("the live-speed poller only runs on a phone", () => {
 	assert.match(body, /if \(!phone \|\| speed === null\) return null;/, "the speed label renders on a desktop");
 });
 
-test("a rotation rebuilds the gesture and layout state", () => {
-	// Without this, a rotation that keeps the width on the same side of the
-	// breakpoint (390 <-> 667) never re-runs decorate, and a swallowed touchend
-	// leaves a start point from the old orientation.
+test("resize only drops gestures on a real width change or a rotation", () => {
+	// The reference did not reset gestures on resize at all. Height-only
+	// changes (keyboard, URL bar) and visualViewport events must leave an
+	// in-flight swipe alone; a real width change, a rotation or leaving the
+	// phone layout still resets it, and touchend/touchcancel always clear.
 	assert.match(functionHead("resetGestures", 400), /edgeSwipe = null;\s*\n\s*touchStart = null;/, "no gesture reset");
 	// There is a second `onResize` in the crop editor; anchor on the rotation
 	// state that only the boot handler declares.
 	const at = CLIENT.indexOf("let rotationTimer = 0;");
 	assert.ok(at >= 0, "no rotation follow-up");
-	const resize = CLIENT.slice(at, at + 900);
-	assert.match(resize, /resetGestures\(\)/, "resize does not reset gestures");
+	const resize = CLIENT.slice(at, at + 1900);
+	assert.match(resize, /let gestureWidth = window\.innerWidth;/, "the boot handler does not remember the width");
+	assert.match(resize, /if \(window\.innerWidth !== gestureWidth\) \{[\s\S]{0,120}?resetGestures\(\);/, "a width change does not reset gestures");
+	assert.match(resize, /const onOrientation = \(\) => \{[\s\S]{0,120}?resetGestures\(\);/, "a rotation does not reset gestures");
 	assert.match(resize, /measureSafeArea\(\)/, "resize does not re-measure");
 	assert.match(resize, /scheduleDecorate\(\)/, "resize does not redecorate");
 	assert.match(resize, /rotationTimer = window\.setTimeout\(\(\) => \{[\s\S]{0,200}?measureSafeArea\(\);[\s\S]{0,100}?scheduleDecorate\(\);[\s\S]{0,80}?\}, 350\)/, "no follow-up pass for the late safe-area values");
-	assert.match(CLIENT, /visualViewport\?\.addEventListener\("resize", onResize\)/, "the visual viewport is not watched");
+	assert.match(CLIENT, /visualViewport\?\.addEventListener\("resize", onLayoutResize\)/, "the visual viewport is not watched");
+	assert.doesNotMatch(CLIENT, /visualViewport\?\.addEventListener\("resize", onResize\)/, "visualViewport still empties the gesture");
 	assert.match(CLIENT, /attributeFilter: \[[^\]]*"data-sidebar-collapsed"/, "drawer changes are not observed");
 	assert.match(CLIENT, /attributeFilter: \[[^\]]*"data-rightbar-collapsed"/, "panel changes are not observed");
 });
@@ -411,20 +445,19 @@ test("a finger drag in the terminal becomes a wheel event", () => {
 	assert.match(CLIENT, /target\.closest\("input, textarea, \[contenteditable=true\], \.xterm/, "the back-swipe still claims terminal drags");
 });
 
-test("the right panel tabs are tappable on a phone", () => {
+test("the right panel keeps upstream tab dimensions but its tap replay", () => {
 	assert.match(functionHead("decorateRightPanelTabs", 600), /querySelectorAll\('\[data-rdsh-rightpanel\] \[role="tab"\]\[data-dockkit-tab\]'\)/, "the tab selector is not attribute-based");
 	assert.match(functionHead("decorateRightPanelTabs", 600), /tab\.setAttribute\("data-rdsh-rtab", ""\)/, "the tab hook is never written");
 	// A tap the app turned into a drag never produces a click; replay one.
 	assert.match(CLIENT, /tabReplayTimer = window\.setTimeout\(\(\) => \{[\s\S]{0,500}?tabTap\.tab\.dispatchEvent\(new MouseEvent\("click"/, "no tap replay");
 	assert.match(CLIENT, /if \(tabTap\.fired \|\| !tabTap\.tab\.isConnected\) return;/, "the replay is not one-shot");
 	assert.match(CLIENT, /target\.closest\("\[data-rdsh-rtab\]"\) === tabCandidate\.tab\) tabCandidate\.fired = true;/, "a real click does not cancel the replay");
-	for (const rule of [
-		/\[data-rdsh-rightpanel\] \[data-dockkit-tab\] \{\s*\n\s*height: 44px !important;/,
-		/\[data-rdsh-rightpanel\] \[data-dockkit-strip-tabs\] \{\s*\n\s*touch-action: pan-x !important;/,
-		/touch-action: manipulation !important;/,
-	]) {
-		assert.match(CLIENT, rule, `missing tab CSS: ${rule}`);
-	}
+	// The merged build enlarged the strip (44px rows, min-width 88px, pan-x,
+	// selected-only close). The reference leaves the upstream dimensions.
+	assert.doesNotMatch(CLIENT, /\[data-rdsh-rightpanel\] \[data-dockkit-tab\] \{\s*\n\s*height: 44px/, "the 44px tab row is still applied");
+	assert.doesNotMatch(CLIENT, /\[data-rdsh-rightpanel\] \[data-dockkit-tab\] \{[^}]*min-width: 88px/, "the widened tab minimum is still applied");
+	assert.doesNotMatch(CLIENT, /data-dockkit-strip-tabs\] \{\s*\n\s*touch-action: pan-x/, "the tab strip is still forced to pan-x");
+	assert.doesNotMatch(CLIENT, /data-dockkit-tab-close\] \{ display: none !important; \}/, "the upstream hover close is still suppressed");
 });
 
 import { COPY, PROBES, copyFor } from "../lib/copy.js";
@@ -486,12 +519,16 @@ function stringLiterals(source) {
 test("no UI copy carries CJK outside the dictionary", () => {
 	// The original bug: Japanese literals shipped in a shell that renders in
 	// English. Copy now lives in lib/copy.js; a CJK string anywhere else is a
-	// regression, whatever the reason.
+	// regression, whatever the reason. The one exception is index.js's
+	// DEFAULTS.description: it is the legacy ja default kept for direct
+	// readers of DEFAULTS, while the effective description comes from
+	// lib/copy.js for the configured language.
+	const allowed = new Set(["index.js: DeepSeek Harness をアプリのように起動します。"]);
 	const offenders = [];
 	for (const file of UI_FILES) {
 		const source = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
 		for (const literal of stringLiterals(source)) {
-			if (CJK.test(literal)) offenders.push(`${file}: ${literal.slice(0, 60)}`);
+			if (CJK.test(literal) && !allowed.has(`${file}: ${literal}`)) offenders.push(`${file}: ${literal.slice(0, 60)}`);
 		}
 	}
 	assert.deepEqual(offenders, [], "a string literal outside lib/copy.js contains CJK");
@@ -511,12 +548,21 @@ test("the English dictionary has no CJK and no empty strings", () => {
 	assert.deepEqual(cjk, [], "English copy is English");
 });
 
-test("a language pack can only override English keys", () => {
-	// ja is empty today; whatever a later pack adds must stay within the key
-	// set the code knows, or it would never be rendered.
+test("the Japanese pack covers every English key with real copy", () => {
+	// The reference copy is restored: no key may fall back to English and no
+	// pack may invent a key the code never renders.
 	const unknown = Object.keys(COPY.ja).filter((key) => !(key in COPY.en));
-	assert.deepEqual(unknown, []);
-	assert.equal(copyFor("ja")["tab.mobile"], COPY.en["tab.mobile"], "an empty ja pack falls back to English");
+	assert.deepEqual(unknown, [], "the ja pack carries an unknown key");
+	const missing = Object.keys(COPY.en).filter((key) => !(key in COPY.ja));
+	assert.deepEqual(missing, [], "the ja pack is missing keys");
+	const empty = Object.entries(COPY.ja).filter(([, value]) => typeof value !== "string" || value === "");
+	assert.deepEqual(empty, [], "a ja key is empty");
+	const samePlaceholders = Object.keys(COPY.en).filter((key) => {
+		const names = (value) => [...value.matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort().join(",");
+		return names(COPY.en[key]) !== names(COPY.ja[key]);
+	});
+	assert.deepEqual(samePlaceholders, [], "a ja string changes a placeholder");
+	assert.equal(copyFor("ja")["tab.mobile"], "モバイル", "the ja pack is not used");
 	assert.equal(copyFor("xx")["tab.mobile"], COPY.en["tab.mobile"], "an unknown language falls back to English");
 });
 
@@ -529,4 +575,217 @@ test("upstream label probes cover English and Japanese", () => {
 	}
 	assert.ok(PROBES.untitled.includes("new session"));
 	assert.ok(PROBES.untitled.includes("新しいセッション"));
+});
+
+test("representative Japanese copy matches the reference wording", () => {
+	// Not just pack self-consistency: these are the strings a user sees. A
+	// mistranslation or an accidental English fallback has to fail here.
+	const expected = {
+		"tab.pwa": "アプリ",
+		"tab.mobile": "モバイル",
+		"tab.input": "入力",
+		"pwa.section.title": "アプリ（PWA）",
+		"mux.fab.open": "セッション一覧を開く",
+		"mux.fab.openWithCount": "セッション一覧を開く（未読・質問待ち {count}件）",
+		// The row's visible name is part of the reference: it stays "Settings"
+		// in the ja pack (the settings tab labels are Japanese, this row is not).
+		"mux.settingsRow": "Settings",
+		"add.label": "画像やファイルを追加",
+		"crop.title": "画像をトリミング",
+		"crop.cancel": "キャンセル",
+		"crop.save": "クエリに追加",
+		"frame.menu": "色枠",
+		"sessionId.label": "セッションIDをコピー",
+		"notify.turn.completed": "作業完了",
+		"notify.questionHeader": "確認",
+		"notify.previewQuestion": "このまま進めますか？",
+		"sw.offlineHeading": "オフラインです",
+		"sw.retry": "再試行",
+		"mux.diag.height.title": "画面の高さ",
+		"mux.diag.scroll.title": "スクロール",
+		"mux.diag.scroll.last": "最後にスクロールした要素",
+		// Mixed Japanese/English reference: the turn counter stays English.
+		"mux.stats.turn": "{count} turn",
+		"mux.stats.turns": "{count} turns",
+		// The stats usage line and the detail popover headings stay English too.
+		"mux.stats.cacheHit": "Cache hit {percent}%",
+		"mux.detail.goal": "Goal",
+	};
+	for (const [key, value] of Object.entries(expected)) {
+		assert.equal(copyFor("ja")[key], value, `${key} does not match the reference Japanese`);
+	}
+	assert.equal(copyFor("en")["tab.mobile"], "Mobile");
+	assert.equal(copyFor("en")["mux.diag.height.title"], "Screen height");
+	assert.equal(copyFor("en")["mux.diag.scroll.title"], "Scroll");
+});
+
+test("the scrollable scan only runs while the settings card renders", () => {
+	// `scrollables()` walks every element, so it must not sit on a
+	// decorate/mutation path. The scroll *recorder* is event-driven; the full
+	// scan is only the Settings card (and the diagnostics callers).
+	const calls = [...CLIENT.matchAll(/scrollables\(\)/g)]
+		.filter((match) => !CLIENT.slice(0, match.index).endsWith("function "));
+	assert.equal(calls.length, 1, "the full scan is running outside the settings card");
+	const start = CLIENT.indexOf("function MobileSection(");
+	const end = CLIENT.indexOf("function InputSection(", start);
+	assert.ok(start >= 0 && end > start, "MobileSection is missing");
+	assert.match(CLIENT.slice(start, end), /scrollables\(\)\.slice\(0, 8\)/, "the settings card stopped showing the scan");
+	assert.match(CLIENT, /document\.addEventListener\("scroll", recordScroll, true\)/, "scroll records are no longer event-driven");
+	assert.doesNotMatch(helperBody("decorateSlow"), /scrollables/, "the scan joined the slow decorate pass");
+});
+
+test("a right-panel swipe closes it even from the left edge", () => {
+	// The reference checks `panelOpen && !drawerOpen` before the edge rules,
+	// so a rightward swipe from inside the left 36px closes the preview
+	// instead of stacking the session drawer on top of it.
+	const body = helperBody("onEdgeSwipeStart");
+	assert.match(body, /if \(panelOpen && !drawerOpen\) \{/, "the panel close branch is not first");
+	assert.equal(/panelOpen && !drawerOpen && touch\.clientX > 36/.test(body), false, "the left edge still opens the drawer over the panel");
+	assert.match(body, /closesPanel: true/, "the panel gesture is not marked");
+	assert.match(body, /scrolledLeftAncestor\(target\) !== null/, "the horizontal-scroll exclusion is gone");
+	assert.match(body, /target\.closest\("input, textarea, \[contenteditable=true\], \.xterm/, "the input/xterm exclusion is gone");
+});
+
+test("the reference viewport zoom lock is restored", () => {
+	assert.match(
+		CLIENT,
+		/const content = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";/,
+		"the fixed viewport string is gone",
+	);
+	assert.match(CLIENT, /if \(meta\.getAttribute\("content"\) !== content\) meta\.setAttribute\("content", content\);/, "the viewport is not applied");
+	assert.match(CLIENT, /input, textarea, \[contenteditable="true"\] \{\s*\n\s*font-size: 16px !important;/, "the 16px focus guard is gone");
+});
+
+test("ensureRightPanelFits is restored and cannot loop or click a ghost", () => {
+	const ensure = helperBody("ensureRightPanelFits");
+	assert.match(ensure, /if \(!narrow\(\)\)/, "the promotion is not phone-scoped");
+	assert.match(ensure, /visibleFullscreenButton\(\)/, "the button is not resolved through the visibility guard");
+	assert.match(ensure, /rightPanelFitPending/, "there is no one-shot guard");
+	assert.match(ensure, /data-rdsh-auto-fired/, "the same button can be clicked repeatedly");
+	const visible = helperBody("visibleFullscreenButton");
+	assert.match(visible, /rect\.width <= 0 \|\| rect\.height <= 0/, "a 0x0 ghost is accepted");
+	assert.match(visible, /closest\(RIGHT_PANEL_ROOT\) === null/, "a button outside the panel is accepted");
+	assert.match(visible, /closest\("\[hidden\]"\) !== null/, "a hidden panel is accepted");
+	assert.match(visible, /visibility === "hidden"/, "a hidden button is accepted");
+	assert.match(helperBody("decorateSlow"), /ensureRightPanelFits\(\)/, "the slow pass never calls it");
+});
+
+test("the restored diagnostics expose the scroll hooks and cards", () => {
+	const api = CLIENT.slice(CLIENT.indexOf("globalThis.__RDSH_MOBILE_UX__ = {"));
+	assert.match(api, /get lastScrolls\(\) \{ return \[\.\.\.lastScrolls\]; \}/, "lastScrolls is missing");
+	assert.match(api, /scrollables,/, "scrollables is missing");
+	assert.match(api, /scrollChain,/, "scrollChain is missing");
+	assert.match(api, /readViewportMetrics,/, "viewport metrics are missing");
+	const start = CLIENT.indexOf("function MobileSection(");
+	const end = CLIENT.indexOf("function InputSection(", start);
+	const section = CLIENT.slice(start, end);
+	assert.match(section, /t\("mux\.diag\.height\.title"\)/, "the screen-height card is missing");
+	assert.match(section, /t\("mux\.diag\.scroll\.title"\)/, "the scroll card is missing");
+	assert.match(section, /lastScrolls\.slice\(-6\)\.reverse\(\)/, "the last-scroll list is missing");
+	assert.match(section, /scrollables\(\)\.slice\(0, 8\)/, "the scrollable list is missing");
+});
+
+/**
+ * Shipped code files: the entries in package.json's `files` that carry source.
+ * Tests are deliberately not listed, so this regression never scans itself.
+ */
+function shippedCodeFiles() {
+	const root = new URL("../", import.meta.url);
+	const files = ["index.js", "client.js", "sw.js", "cordis.patch.yml"].map((name) => new URL(name, root));
+	const walk = (dir) => {
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const child = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, dir);
+			if (entry.isDirectory()) walk(child);
+			else if (/\.(?:js|mjs|json|ya?ml)$/.test(entry.name)) files.push(child);
+		}
+	};
+	walk(new URL("notify/", root));
+	walk(new URL("lib/", root));
+	return files;
+}
+
+test("shipped code carries no personal provider or device identifiers", () => {
+	// The reference UI is generic: no operator-specific provider name, account
+	// path, or device/host label may reach copy that every install renders.
+	// Tests are excluded by shippedCodeFiles(), so this only guards shipped code.
+	const personal = new RegExp(
+		[
+			// a concrete account's home directory: /home/<user>, /Users/<user>
+			String.raw`\/(?:home|Users)\/[A-Za-z0-9._-]+`,
+			// desktop-style host labels: a short alphabetic prefix plus three
+			// digits. Longer digit runs collide with standards and escapes, and
+			// codec names share this shape without being identifiers.
+			String.raw`(?<![\\#])\b(?!h26[45]\b|x26[45]\b)[a-z]{1,2}\d{3}\b`,
+			// RFC 1918 private and Tailscale CGNAT IPv4 literals
+			String.raw`\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`,
+			String.raw`\b192\.168\.\d{1,3}\.\d{1,3}\b`,
+			String.raw`\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b`,
+			String.raw`\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b`,
+		].join("|"),
+	);
+	const detects = (sample) => personal.test(sample);
+	for (const sample of [
+		"/home/example/app",
+		"/Users/example/app",
+		"pc123-desktop",
+		"10.1.2.3",
+		"172.20.3.4",
+		"192.168.1.20",
+		"100.101.102.103",
+	]) {
+		assert.ok(detects(sample), `the identifier shape ${sample} is not detected`);
+	}
+	for (const sample of ["icon-192", "sha256", "h264", "#ef4444", "p1363"]) {
+		assert.ok(!detects(sample), `the generic token ${sample} is a false positive`);
+	}
+	const offenders = [];
+	for (const file of shippedCodeFiles()) {
+		const text = readFileSync(file, "utf8");
+		const match = text.match(personal);
+		if (match !== null) offenders.push(`${file.pathname}: ${match[0]}`);
+	}
+	assert.deepEqual(offenders, [], "a shipped file contains a personal provider or device identifier");
+});
+
+test("the question card viewport sizing is phone-only", () => {
+	// Desktop must keep the upstream card width: the new 100vw - 32px rule is
+	// inside the narrow media block, so no >=768px rule changes.
+	const rules = cssBlocks().flatMap((css) => cssRules(css));
+	const frame = rules.find((rule) => rule.head === "[data-rdsh-question-frame]");
+	const card = rules.find((rule) => rule.head === "[data-rdsh-question-frame] > [data-rdsh-question-card]");
+	assert.ok(frame, "the question frame rule is missing");
+	assert.ok(card, "the question card rule is missing");
+	for (const rule of [frame, card]) {
+		assert.ok(rule.at.some((head) => /max-width:\s*767px/.test(head)), `${rule.head} is outside the phone query`);
+	}
+});
+
+test("the queue dock meets the composer and the preview never covers it", () => {
+	// Phone-only: the dock is as wide as the composer card, pulled flush to its
+	// top edge, with square bottom corners. The preview is fixed and height
+	// capped so a long queued text scrolls above the composer.
+	assert.match(CLIENT, /\[data-rdsh-queue-dock\] \{[^}]*width: calc\(100% - 32px\) !important;[^}]*margin-bottom: -6px !important;/, "the queue dock is not attached to the composer");
+	assert.match(CLIENT, /\[data-rdsh-queue-panel\] \{[^}]*border-bottom-left-radius: 0 !important;[^}]*border-bottom-right-radius: 0 !important;/, "the queue panel keeps floating bottom corners");
+	assert.match(CLIENT, /\.rdsh-mux-queue-preview \{[^}]*position: fixed;[^}]*max-height: min\(50vh, 360px\);[^}]*overflow-y: auto;/, "the queued text preview is not a capped overlay");
+	assert.match(CLIENT, /\.rdsh-mux-queue-menu \{[^}]*position: fixed;/, "the long-press menu is not an overlay");
+	const rules = cssBlocks().flatMap((css) => cssRules(css));
+	for (const head of ["[data-rdsh-queue-dock]", "[data-rdsh-queue-panel]", ".rdsh-mux-queue-preview", ".rdsh-mux-queue-menu"]) {
+		const rule = rules.find((entry) => entry.head === head);
+		assert.ok(rule, `${head} is missing`);
+		assert.ok(rule.at.some((media) => /max-width:\s*767px/.test(media)), `${head} is outside the phone query`);
+	}
+});
+
+test("the workspace picker caps its list and keeps Add workspace outside it", () => {
+	assert.match(CLIENT, /\[data-rdsh-workspace-menu\] \{[^}]*max-height: min\(70vh, 520px\) !important;/, "the workspace menu is not height-bounded");
+	assert.match(CLIENT, /\[data-rdsh-workspace-menu\] \[data-rdsh-workspace-viewport\] \{[^}]*max-height: min\(40vh, 320px\) !important;[^}]*overflow-y: auto !important;/, "the workspace list is not the scroll viewport");
+	assert.match(CLIENT, /\[data-rdsh-workspace-menu\] \[data-rdsh-workspace-hidden\] \{ display: none !important; \}/, "filtered rows are still visible");
+	assert.match(CLIENT, /\.rdsh-mux-workspace-search input \{[^}]*font-size: 16px;/, "the search field can trigger iOS zoom");
+	assert.match(CLIENT, /\.rdsh-mux-workspace-empty \{[^}]*font-size: 13px;/, "the no-match row has no style");
+	const rules = cssBlocks().flatMap((css) => cssRules(css));
+	for (const head of ["[data-rdsh-workspace-menu]", "[data-rdsh-workspace-menu] [data-rdsh-workspace-viewport]", ".rdsh-mux-workspace-search", ".rdsh-mux-workspace-empty"]) {
+		const rule = rules.find((entry) => entry.head === head);
+		assert.ok(rule, `${head} is missing`);
+		assert.ok(rule.at.some((media) => /max-width:\s*767px/.test(media)), `${head} is outside the phone query`);
+	}
 });
