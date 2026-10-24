@@ -3375,6 +3375,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       }
       if (state.enterToSend) {
         markMobileSession();
+        closeKeyboardAfterSend();
         return;
       }
       event.preventDefault();
@@ -3646,6 +3647,7 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
         const primary = target.closest && target.closest('[data-rdsh-composer-root] [class*="primary"]');
         if (primary !== null && primary !== undefined && primary.disabled !== true && !STOP_PROBE.test(primary.getAttribute("aria-label") || "")) {
           markMobileSession();
+          closeKeyboardAfterSend();
         }
       }
       // Phone "+": open the OS file/photo picker directly. Commands live in "/".
@@ -3775,6 +3777,49 @@ html[data-rdsh-pwa="standalone"] .rdsh-pwa-toasts { top: calc(env(safe-area-inse
       setTimeout(() => {
         if (document.activeElement === field) field.blur();
       }, 0);
+    }
+
+    // ---------------------------------------------------------------------
+    // Keyboard: a sent message puts it away
+    // ---------------------------------------------------------------------
+    /** How long after a send the draft may take to leave the composer. */
+    const SEND_SETTLE_MS = 2000;
+    const SEND_POLL_MS = 50;
+    let sendSettleTimer = 0;
+
+    /**
+     * Put the soft keyboard away once the app has taken the draft.
+     *
+     * The stock composer keeps focus after a send so a desktop user can go on
+     * typing, and it holds focus through the toolbar press itself (the send
+     * button's mousedown refocuses the editor). On a phone that leaves the
+     * keyboard over the reply the user is waiting to read. Call this from the
+     * gesture that sends; it runs before the app's own handler, so the draft is
+     * still in the editor and the wait below is for the app to clear it.
+     *
+     * A send the app refuses (an upload still running, a failed submit that
+     * restores the draft) leaves the text in place and the keyboard open, so
+     * the user can fix it. Only a phone is affected: a desktop window keeps
+     * its focus, narrow or not.
+     */
+    function closeKeyboardAfterSend() {
+      if (!phone()) return;
+      const deadline = Date.now() + SEND_SETTLE_MS;
+      clearTimeout(sendSettleTimer);
+      const settle = () => {
+        sendSettleTimer = 0;
+        const editor = document.querySelector("[data-composer-input]");
+        if (editor === null) return;
+        if ((editor.textContent || "").trim() !== "") {
+          if (Date.now() < deadline) sendSettleTimer = setTimeout(settle, SEND_POLL_MS);
+          return;
+        }
+        // Only the composer's own keyboard: a field the user has moved on to
+        // (a rename, the model search) keeps its focus.
+        if (document.activeElement === editor) editor.blur();
+      };
+      // After this click finishes, so the app's submit has already run.
+      sendSettleTimer = setTimeout(settle, 0);
     }
 
     function onKeyDown(event) {
@@ -6291,6 +6336,7 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
           window.removeEventListener("orientationchange", onResize);
           window.visualViewport?.removeEventListener("resize", onResize);
           clearTimeout(rotationTimer);
+          clearTimeout(sendSettleTimer);
           document.removeEventListener("dragstart", onDragStartCapture, true);
           document.removeEventListener("dragend", onDragEndCapture, true);
           document.removeEventListener("dblclick", onSessionTitleDoubleClick, true);

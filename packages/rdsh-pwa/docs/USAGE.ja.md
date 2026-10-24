@@ -28,7 +28,7 @@ English: [USAGE.en.md](USAGE.en.md)
 | オフライン起動 | アプリシェルをキャッシュし、圏外でも画面が出る（`/api` は絶対にキャッシュしない）。接続が戻ると自動で通常動作に戻る |
 | ホーム画面 | iOS 用 `apple-touch-icon` / `apple-mobile-web-app-status-bar-style`、`format-detection: telephone=no`。`apple-mobile-web-app-capable` / `apple-mobile-web-app-title` / `application-name` は**付けない**（iOS 26 でレガシーな view frame になり、下にステータスバー分の未描画帯が出るため）。standalone は manifest の `display` で指定 |
 | セーフエリア | スタンドアロン起動時だけ `env(safe-area-inset-*)` を `#root` の padding に反映。ノッチ・ホームインジケータと重ならない |
-| キーボード | `interactive-widget=resizes-content` で、ソフトキーボード表示時に入力欄が隠れない |
+| キーボード | `interactive-widget=resizes-content` で、ソフトキーボード表示時に入力欄が隠れない。スマホで送信するとキーボードを閉じる（送信を受け付けなかったときは下書きとキーボードを残す。PC は対象外） |
 | インストール導線 | サイドバー下部のアイコン、スマホ用カード（「あとで」で30日スヌーズ）、設定 →「アプリ」 |
 | 更新通知 | 新しいビルドのサービスワーカーが待機したら「新しいバージョンがあります → 再読み込み」。勝手にリロードはしない（実行中のセッションを壊さない） |
 | オフライン表示 | 上部に「オフライン — 再接続を待っています」 |

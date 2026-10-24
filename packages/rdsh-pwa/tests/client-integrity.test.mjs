@@ -338,6 +338,18 @@ test("Enter keeps its desktop behaviour", () => {
 	assert.doesNotMatch(stripLiterals(head), /narrow\s*\(/, "a narrow desktop window would lose Enter");
 });
 
+test("Enter-to-send puts the keyboard away like the send button", () => {
+	// The tap is covered by client-load.test.mjs. This branch only runs with the
+	// Enter-sends setting on, which a stub boot cannot switch on, so the call is
+	// pinned here instead. Without it the keyboard stays up after an Enter send.
+	const head = functionHead("onKeyDownCapture", 3000);
+	assert.match(
+		head,
+		/if \(state\.enterToSend\) \{\s*markMobileSession\(\);\s*closeKeyboardAfterSend\(\);\s*return;\s*\}/,
+		"the Enter-sends branch no longer calls closeKeyboardAfterSend",
+	);
+});
+
 test("panel-wide decorations stay off the desktop", () => {
 	// Both of these reach across upstream UI: the stats dock opens the context
 	// panel to read a number, and the lightbox injects a crop button.

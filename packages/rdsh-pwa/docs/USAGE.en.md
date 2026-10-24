@@ -87,6 +87,8 @@ What changes:
 - Settings get a single column and a scrolling tab strip
 - The code viewer always wraps and never scrolls sideways
 - The composer stays above the keyboard
+- Sending a message puts the keyboard away, so the reply is not covered. A send the app
+  refuses keeps the draft and the keyboard. A desktop window keeps its focus.
 - Session rows keep their actions hidden until the menu or a long press
 - Right-panel tabs are finger-sized, and the tab strip scrolls sideways
 - Dragging inside the terminal scrolls it (the bundled xterm has no touch support)

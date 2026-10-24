@@ -128,13 +128,15 @@ function memoryStorage(initial = {}) {
  * `narrow` answers the phone-width media query, `coarse` and `standalone`
  * answer the device queries `phone()` asks, `storage` supplies remembered
  * localStorage entries, `configureDocument` lets a test wire up the few DOM
- * nodes it cares about, and `schedule` replaces setTimeout.
+ * nodes it cares about, `schedule` replaces setTimeout, and `clock` (an object
+ * with a `now` field) replaces `Date.now` for code that gives up after a delay.
  */
 function bootClient({
 	narrow = false,
 	coarse = false,
 	standalone = false,
 	storage = null,
+	clock = null,
 	configureDocument = () => {},
 	schedule = () => 0,
 } = {}) {
@@ -224,6 +226,13 @@ function bootClient({
 		performance: { now: () => 0 },
 		globalThis: undefined,
 	};
+	if (clock !== null) {
+		sandbox.Date = class FakeDate extends Date {
+			static now() {
+				return clock.now;
+			}
+		};
+	}
 	sandbox.globalThis = sandbox;
 	sandbox.window.document = sandbox.document;
 	sandbox.window.matchMedia = sandbox.matchMedia;
@@ -329,6 +338,115 @@ test("other buttons leave the drawer open, and so does a wide screen", () => {
 	assert.equal(drawerClosedAfterTapping("Plugins"), false);
 	assert.equal(drawerClosedAfterTapping("Session actions"), false);
 	assert.equal(drawerClosedAfterTapping("New session", { narrow: false }), false);
+});
+
+/**
+ * Boot the client with the composer holding `draft` and its caret in it, tap
+ * the composer's primary button, and hand back what a test needs to play the
+ * app: the editor, the pending timers, and `pass()` to run them once.
+ *
+ * Nothing here clears the draft. The app does that, so a test decides when.
+ */
+function tapSend({ draft = "hello", label = "Send message", ...options } = {}) {
+	const timers = [];
+	const clickHandlers = [];
+	const clock = { now: 1000 };
+	const editor = element();
+	editor.textContent = draft;
+	let blurs = 0;
+	editor.blur = () => {
+		blurs += 1;
+	};
+	let doc;
+	bootClient({
+		narrow: true,
+		coarse: true,
+		clock,
+		...options,
+		schedule: (callback) => timers.push(callback),
+		configureDocument(configured) {
+			doc = configured;
+			doc.activeElement = editor;
+			doc.querySelector = (selector) => (selector === "[data-composer-input]" ? editor : null);
+			doc.addEventListener = (type, handler) => {
+				if (type === "click") clickHandlers.push(handler);
+			};
+		},
+	});
+	assert.equal(clickHandlers.length, 1, "the client listens for clicks once");
+	timers.length = 0;
+
+	const button = element();
+	button.disabled = false;
+	button.setAttribute("aria-label", label);
+	const target = { closest: (selector) => (selector.includes('[class*="primary"]') ? button : null) };
+	clickHandlers[0]({ target, preventDefault() {}, stopImmediatePropagation() {} });
+	return {
+		editor,
+		doc,
+		clock,
+		timers,
+		blurs: () => blurs,
+		pass() {
+			for (const callback of timers.splice(0)) callback();
+		},
+	};
+}
+
+test("a phone send puts the keyboard away once the app has taken the draft", () => {
+	const send = tapSend();
+	assert.equal(send.blurs(), 0, "nothing happens inside the click, before the app's own handler has run");
+	send.pass();
+	assert.equal(send.blurs(), 0, "the draft is still in the composer, so the send has not happened yet");
+	send.editor.textContent = "";
+	send.pass();
+	assert.equal(send.blurs(), 1, "the draft is gone: the keyboard goes");
+	assert.equal(send.timers.length, 0, "and the wait is over");
+});
+
+test("a send the app refuses keeps the keyboard and stops waiting", () => {
+	const send = tapSend();
+	let passes = 0;
+	while (send.timers.length > 0 && passes < 100) {
+		send.clock.now += 100;
+		send.pass();
+		passes += 1;
+	}
+	assert.ok(passes < 100, "the wait gives up instead of polling forever");
+	assert.equal(send.blurs(), 0, "the draft never left, so the user can still fix it");
+});
+
+test("only the composer's own keyboard is put away", () => {
+	const send = tapSend();
+	send.doc.activeElement = element();
+	send.editor.textContent = "";
+	send.pass();
+	assert.equal(send.blurs(), 0, "focus had moved to another field, which keeps it");
+});
+
+test("the stop button leaves the keyboard alone", () => {
+	const send = tapSend({ label: "Stop", draft: "" });
+	assert.equal(send.timers.length, 0, "stopping a turn is not a send");
+});
+
+test("a desktop window keeps its focus after a send, narrow or not", () => {
+	const desktops = {
+		"narrow window": { narrow: true, coarse: false },
+		"wide window": { narrow: false, coarse: false },
+		// The #15 opt-in makes the click handler look at the send button on a
+		// desktop, so it is the case most likely to leak the phone behaviour.
+		"wide window with the turn-notification opt-in": {
+			narrow: false,
+			coarse: false,
+			storage: { "rdsh-mobile-ux:notify-device-turns": "1" },
+		},
+	};
+	for (const [name, options] of Object.entries(desktops)) {
+		const send = tapSend(options);
+		send.editor.textContent = "";
+		send.pass();
+		assert.equal(send.blurs(), 0, `${name}: the composer keeps focus`);
+	}
 });
 
 /**
