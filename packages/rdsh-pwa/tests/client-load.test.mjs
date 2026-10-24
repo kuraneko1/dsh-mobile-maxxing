@@ -362,6 +362,16 @@ test("the store reports the device separately from the layout", () => {
 	assert.equal(state.phone, false, "a narrow desktop window is not a phone");
 });
 
+test("the saved Enter-sends choice is read when the page loads", () => {
+	// The store is built while the module body runs, so a key constant declared
+	// below it is still uninitialised then. The read is wrapped in try/catch,
+	// which turned that into "off" on every reload without a visible error.
+	const off = bootClient();
+	assert.equal(off.sandbox.__RDSH_MOBILE_UX__.state.enterToSend, false, "Enter inserts a newline by default");
+	const on = bootClient({ storage: { "rdsh-mobile-ux:enter-to-send": "1" } });
+	assert.equal(on.sandbox.__RDSH_MOBILE_UX__.state.enterToSend, true, "the saved choice survives a reload");
+});
+
 test("the desktop notification opt-in is read from this browser", () => {
 	const off = bootClient();
 	assert.equal(off.sandbox.__RDSH_MOBILE_UX__.state.notifyDeviceTurns, false, "phone-only stays the default");
