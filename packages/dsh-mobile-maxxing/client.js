@@ -9249,6 +9249,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // ---------------------------------------------------------------------
     const PRESENTED_CHUNK_BYTES = 262144;
     const PRESENTED_MAX_CHUNKS = 2048;
+    // A finger resting on a phone drifts further than a mouse-era slop, and
+    // the transcript scrolls under it while a turn streams: a scroll event
+    // must not cancel the press (a real scroll drag still moves the pointer
+    // past the slop and cancels there).
+    const PRESENTED_PRESS_SLOP_PX = 24;
     let presentedPress = null;
     let presentedMenu = null;
     let presentedClickGuard = null;
@@ -9408,6 +9413,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         x: typeof event.clientX === "number" ? event.clientX : 0,
         y: typeof event.clientY === "number" ? event.clientY : 0,
         pointerId: typeof event.pointerId === "number" ? event.pointerId : null,
+        since: Date.now(),
         timer: 0,
       };
       presentedPress.timer = setTimeout(() => {
@@ -9423,7 +9429,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (!presentedSamePointer(event) || event.isPrimary === false) return;
       const dx = (typeof event.clientX === "number" ? event.clientX : 0) - presentedPress.x;
       const dy = (typeof event.clientY === "number" ? event.clientY : 0) - presentedPress.y;
-      if (Math.hypot(dx, dy) > FILES_PRESS_SLOP_PX) cancelPresentedPress();
+      if (Math.hypot(dx, dy) > PRESENTED_PRESS_SLOP_PX) cancelPresentedPress();
     }
 
     function onPresentedPointerUp(event) {
@@ -9433,14 +9439,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function onPresentedPointerCancel(event) {
       if (!presentedSamePointer(event)) return;
+      const press = presentedPress;
       cancelPresentedPress();
-    }
-
-    function onPresentedScroll() {
-      // A press is positional; any scroll while the finger is down ends it.
-      // An open menu is left alone: the transcript streams and scrolls on
-      // its own, and the menu must not vanish from under the reader.
-      cancelPresentedPress();
+      // Android often ends a stationary long press with pointercancel when
+      // the browser takes the gesture over (just before its contextmenu).
+      // A cancel that arrives after most of the press has already elapsed
+      // is that takeover, not a scroll: treat it as the completed press.
+      if (press !== null && Date.now() - press.since >= 400) {
+        openPresentedMenu(press);
+        armPresentedClickGuard(press.card);
+      }
     }
 
     function onPresentedContextMenu(event) {
@@ -9589,7 +9597,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       document.addEventListener("pointermove", onPresentedPointerMove, true);
       document.addEventListener("pointerup", onPresentedPointerUp, true);
       document.addEventListener("pointercancel", onPresentedPointerCancel, true);
-      document.addEventListener("scroll", onPresentedScroll, true);
       document.addEventListener("contextmenu", onPresentedContextMenu, true);
     }
 
@@ -9600,7 +9607,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         document.removeEventListener("pointermove", onPresentedPointerMove, true);
         document.removeEventListener("pointerup", onPresentedPointerUp, true);
         document.removeEventListener("pointercancel", onPresentedPointerCancel, true);
-        document.removeEventListener("scroll", onPresentedScroll, true);
         document.removeEventListener("contextmenu", onPresentedContextMenu, true);
       }
       closePresentedMenu();

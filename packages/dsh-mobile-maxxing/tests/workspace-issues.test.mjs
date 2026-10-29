@@ -1536,6 +1536,33 @@ test("presented: movement cancels the press and the actions slot is not a target
 	assert.equal(run.document.querySelector("[data-rdsh-presented-menu]"), null, "the upstream actions slot became a long-press target");
 });
 
+test("presented: a late pointercancel still completes a stationary press", () => {
+	const run = boot();
+	run.reset();
+	const presented = presentedCard(run.document);
+	run.tools.installWorkspaceTools();
+	let now = 1000;
+	run.sandbox.Date = { now: () => now };
+
+	run.document.dispatchEvent(event("pointerdown", presented.preview, { pointerType: "touch", clientX: 10, clientY: 10 }));
+	now = 1600;
+	run.document.dispatchEvent(event("pointercancel", presented.preview, { pointerType: "touch" }));
+	assert.ok(run.document.querySelector("[data-rdsh-presented-menu]"), "a late pointercancel dropped the press");
+});
+
+test("presented: transcript scroll while holding does not cancel the press", () => {
+	const run = boot();
+	run.reset();
+	const presented = presentedCard(run.document);
+	run.tools.installWorkspaceTools();
+
+	run.document.dispatchEvent(event("pointerdown", presented.preview, { pointerType: "touch", clientX: 10, clientY: 10 }));
+	// The transcript streams and auto-scrolls under a resting finger.
+	run.document.dispatchEvent(event("scroll", run.document.body));
+	run.runTimers(500);
+	assert.ok(run.document.querySelector("[data-rdsh-presented-menu]"), "a transcript scroll cancelled the long press");
+});
+
 test("presented: download assembles the file from readBytes chunks", async () => {
 	const run = boot();
 	run.reset();
