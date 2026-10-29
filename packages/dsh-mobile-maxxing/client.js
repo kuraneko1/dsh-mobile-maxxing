@@ -12747,6 +12747,84 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       scope.effect?.(() => () => clearInterval(timer));
     }
 
+    /** Android standalone back: one owned entry above the current DSH screen. */
+    function installAndroidBack(scope, workspace) {
+      if (!/Android/i.test(navigator.userAgent || "") || !window.matchMedia("(display-mode: standalone)").matches || typeof workspace?.startSession !== "function") return;
+      const key = "__dshMobileAndroidBack";
+      const owned = (state) => state?.[key] === true;
+      let top = owned(history.state);
+      let removing = false;
+      let transitioning = false;
+      let transitionTimer = 0;
+      let disposed = false;
+      const screen = () => {
+        const header = document.querySelector("header[data-window-drag]");
+        if (!header) return "unknown";
+        return /_headerBlank/.test(header.className) ? "blank" : shownSessionId() ? "session" : "unknown";
+      };
+      const push = () => {
+        if (disposed || top || removing || transitioning) return;
+        const state = history.state;
+        if (state !== null && (typeof state !== "object" || Array.isArray(state))) return;
+        history.pushState({ ...state, [key]: true }, "", location.href);
+        top = true;
+      };
+      const sync = () => {
+        if (disposed || removing) return;
+        const view = screen();
+        if (transitioning) {
+          if (view !== "blank") return;
+          transitioning = false;
+          clearTimeout(transitionTimer);
+        }
+        if (view === "blank" && top && owned(history.state)) {
+          removing = true;
+          history.back();
+        } else if (view === "session" && !top && navigator.userActivation?.hasBeenActive) push();
+      };
+      const onPop = (event) => {
+        const wasTop = top;
+        top = owned(event.state);
+        if (removing) { removing = false; sync(); return; }
+        if (top) {
+          // Forward to an old sentinel is not a navigation to a session.
+          if (screen() === "blank") { removing = true; history.back(); }
+          return;
+        }
+        if (!wasTop) return;
+        if (screen() !== "session") return;
+        // Defer navigation while a dialog, menu or visible attachment is present.
+        const blocked = document.querySelector('[role="dialog"], dialog[open], [data-shortcut-modal], [role="menu"], [role="listbox"]');
+        const files = [...document.querySelectorAll('[data-composer-card] input[type="file"]')].some((input) => input.files?.length > 0);
+        // The stock attachment rail only mounts while it contains files or images.
+        const attachments = document.querySelector('[data-composer-card] [class*="_rail"], [data-composer-card] [class*="attachment"]');
+        if (blocked || files || attachments) { push(); return; }
+        if (document.documentElement.getAttribute("data-rdsh-drawer") === "open") { closeDrawer(); push(); return; }
+        if (pressRouteBack()) { push(); return; }
+        try {
+          transitioning = true;
+          transitionTimer = setTimeout(() => { transitioning = false; if (screen() === "session") push(); }, 3000);
+          const result = workspace.startSession();
+          if (result && typeof result.then === "function") result.catch(() => { clearTimeout(transitionTimer); transitioning = false; push(); });
+        } catch { clearTimeout(transitionTimer); transitioning = false; push(); }
+      };
+      const onInteraction = (event) => { if (event.isTrusted && screen() === "session") push(); };
+      const observer = new MutationObserver(sync);
+      observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "data-conversation-session"] });
+      window.addEventListener("popstate", onPop);
+      document.addEventListener("pointerdown", onInteraction, true);
+      document.addEventListener("keydown", onInteraction, true);
+      sync();
+      scope.effect?.(() => () => {
+        disposed = true;
+        clearTimeout(transitionTimer);
+        observer.disconnect();
+        window.removeEventListener("popstate", onPop);
+        document.removeEventListener("pointerdown", onInteraction, true);
+        document.removeEventListener("keydown", onInteraction, true);
+      });
+    }
+
     /** Read `?session=` once, then drop it from the address bar. */
     function sessionFromUrl() {
       try {
@@ -12754,7 +12832,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const id = url.searchParams.get("session");
         if (id === null || id === "") return "";
         url.searchParams.delete("session");
-        history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+        history.replaceState(history.state, "", `${url.pathname}${url.search}${url.hash}`);
         return id;
       } catch {
         return "";
@@ -15540,6 +15618,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         // own schedule; without it a notification tap can only raise a banner.
         ctx.inject(["uiWorkspace", "sessions", "conversation"], (scope) => {
           attachSessionOpener(scope);
+          installAndroidBack(scope, scope.uiWorkspace ?? scope.get?.("uiWorkspace"));
           if (phone()) installLocalPermissionDefault(scope, scope.uiWorkspace, scope.sessions, scope.conversation?.blocks ?? null);
         });
         ctx.inject(["remote", "remote.permissionPresets"], (scope) => {
