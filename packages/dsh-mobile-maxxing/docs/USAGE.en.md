@@ -28,6 +28,7 @@ separate because it changes the PC renderer.
 | Notifications | In-app banner while the app is on screen, Web Push otherwise |
 | Notification sounds | Five synthesised presets, volume, no audio files |
 | Mobile layout | Sidebar becomes a drawer, settings open in one tap, code wraps by default (toggle available) |
+| Presented files | Long-press a delivered file card for Download / Share / Preview / Copy path. Downloads read through the session's workspace-files API (up to 64 MiB); Share appears only where the browser can share files |
 | CJK rendering (optional) | Only with the separate `rdsh-markdown-cjk` package; this package leaves the Markdown renderer stock to avoid changing the PC |
 
 ## Screenshots

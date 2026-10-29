@@ -322,6 +322,8 @@ export const COPY = {
 		"files.menu.copyPath": "Copy path",
 		"files.menu.copyName": "Copy name",
 		"files.copied": "Copied",
+
+		// --- presented (deliverable) files in the transcript ---
 		"presented.menu": "Presented file",
 		"presented.download": "Download",
 		"presented.share": "Share",
@@ -647,6 +649,8 @@ export const COPY = {
 		"files.menu.copyPath": "パスをコピー",
 		"files.menu.copyName": "名前をコピー",
 		"files.copied": "コピーしました",
+
+		// --- チャットの成果物ファイル ---
 		"presented.menu": "成果物ファイル",
 		"presented.download": "ダウンロード",
 		"presented.share": "共有",

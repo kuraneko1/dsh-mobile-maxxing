@@ -1500,6 +1500,10 @@ test("presented: a 500ms press on a delivered file opens the download menu", asy
 	run.reset();
 	const presented = presentedCard(run.document);
 	run.tools.installWorkspaceTools();
+	// Share is only offered where the browser can share files.
+	run.sandbox.File = File;
+	run.sandbox.navigator.canShare = () => true;
+	run.sandbox.navigator.share = async () => {};
 
 	run.document.dispatchEvent(event("pointerdown", presented.preview, { pointerType: "touch", clientX: 10, clientY: 10 }));
 	run.runTimers(500);
@@ -1561,6 +1565,98 @@ test("presented: transcript scroll while holding does not cancel the press", () 
 	run.document.dispatchEvent(event("scroll", run.document.body));
 	run.runTimers(500);
 	assert.ok(run.document.querySelector("[data-rdsh-presented-menu]"), "a transcript scroll cancelled the long press");
+});
+
+
+test("presented: Preview from the menu is not swallowed by the click guard", () => {
+	const run = boot();
+	run.reset();
+	const presented = presentedCard(run.document);
+	run.tools.installWorkspaceTools();
+	let now = 1000;
+	run.sandbox.Date = { now: () => now };
+	let previewClicks = 0;
+	presented.preview.addEventListener("click", () => { previewClicks += 1; });
+	presented.preview.click = () => presented.preview.dispatchEvent(event("click", presented.preview));
+
+	// Complete the press through the pointercancel path, which arms the guard.
+	run.document.dispatchEvent(event("pointerdown", presented.preview, { pointerType: "touch", clientX: 10, clientY: 10 }));
+	now = 1600;
+	run.document.dispatchEvent(event("pointercancel", presented.preview, { pointerType: "touch" }));
+	const menu = run.document.querySelector("[data-rdsh-presented-menu]");
+	assert.ok(menu, "the pointercancel path did not open the menu");
+	const previewItem = [...menu.querySelectorAll("button")].find((item) => item.textContent === COPY.en["presented.preview"]);
+	assert.ok(previewItem, "the menu has no Preview item");
+	previewItem.dispatchEvent(event("click", previewItem));
+	assert.equal(previewClicks, 1, "the click guard swallowed the Preview action");
+});
+
+test("presented: Share falls back to a download when sharing is refused", async () => {
+	const run = boot();
+	run.reset();
+	presentedCard(run.document);
+	run.tools.installWorkspaceTools();
+	run.sandbox.Blob = Blob;
+	run.sandbox.File = File;
+	run.sandbox.navigator.canShare = () => true;
+	run.sandbox.navigator.share = async () => {
+		throw Object.assign(new Error("activation lost"), { name: "NotAllowedError" });
+	};
+	run.sandbox.fetch = async () => ({
+		ok: true,
+		status: 200,
+		headers: { get: () => "multipart/form-data; boundary=x" },
+		formData: async () => new Map([
+			["metadata", JSON.stringify({ type: "server-response", result: { ok: true, value: { bytes: 5, offset: 0, data: null, eof: true } }, attachments: [{ path: ["data"], codec: "bytes", part: "bytes-0" }] })],
+			["bytes-0", new Blob(["hello"])],
+		]),
+	});
+	const saved = [];
+	run.sandbox.URL.createObjectURL = (blob) => { saved.push(blob); return "blob:fake"; };
+	run.sandbox.URL.revokeObjectURL = () => {};
+
+	await run.tools.downloadPresentedFile({ sessionId: "session-1", path: "/work/repo/report.md", name: "report.md" }, true);
+	assert.equal(saved.length, 1, "a refused share did not fall back to a download");
+	run.runTimers(60000);
+});
+
+test("presented: the injected remote reads chunks and the size cap stops huge files", async () => {
+	const run = boot();
+	run.reset();
+	presentedCard(run.document);
+	run.tools.installWorkspaceTools();
+	run.sandbox.Blob = Blob;
+	run.sandbox.fetch = async () => { throw new Error("fetch must not run when a remote is injected"); };
+	const saved = [];
+	run.sandbox.URL.createObjectURL = (blob) => { saved.push(blob); return "blob:fake"; };
+	run.sandbox.URL.revokeObjectURL = () => {};
+	const calls = [];
+	run.tools.setPresentedRemote({
+		workspaceFiles: {
+			readBytes: async (sessionId, path, options) => {
+				calls.push({ sessionId, path, options });
+				return { ok: true, value: { data: [104, 101, 108, 108, 111], bytes: 5, offset: options.range.offset, eof: true } };
+			},
+		},
+	});
+	await run.tools.downloadPresentedFile({ sessionId: "session-1", path: "/work/repo/report.md", name: "report.md" });
+	assert.equal(calls.length, 1);
+	assert.equal(calls[0].sessionId, "session-1");
+	assert.equal(calls[0].path, "/work/repo/report.md");
+	assert.equal(calls[0].options.range.offset, 0);
+	assert.equal(calls[0].options.range.length, 262144);
+	assert.equal(await saved[0].text(), "hello", "the remote chunk was not assembled");
+	run.runTimers(60000);
+
+	// A file whose declared size is past the cap is refused after one chunk.
+	run.tools.setPresentedRemote({
+		workspaceFiles: {
+			readBytes: async () => ({ ok: true, value: { data: [1], bytes: 100 * 1024 * 1024, offset: 0, eof: false } }),
+		},
+	});
+	await run.tools.downloadPresentedFile({ sessionId: "session-1", path: "/work/repo/big.mp4", name: "big.mp4" });
+	assert.equal(saved.length, 1, "an over-cap file was still handed to the browser");
+	run.runTimers(60000);
 });
 
 test("presented: download assembles the file from readBytes chunks", async () => {

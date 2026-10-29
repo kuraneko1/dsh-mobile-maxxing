@@ -9248,7 +9248,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // file the preview could not.
     // ---------------------------------------------------------------------
     const PRESENTED_CHUNK_BYTES = 262144;
-    const PRESENTED_MAX_CHUNKS = 2048;
+    // A delivered file is assembled in memory, so refuse anything huge
+    // instead of trying to hold it: 64 MiB is far past documents, images
+    // and the zips this card normally delivers.
+    const PRESENTED_MAX_BYTES = 67108864;
+    const PRESENTED_MAX_CHUNKS = Math.ceil(PRESENTED_MAX_BYTES / PRESENTED_CHUNK_BYTES) + 1;
+    const PRESENTED_CANCEL_MIN_MS = 400;
+    // The DSH remote service, when the host injected it. Reading through it
+    // (instead of a bare fetch) uses the same connection/transport the rest
+    // of DSH Web uses, which is what reaches the host inside app WebViews.
+    let presentedRemote = null;
     // A finger resting on a phone drifts further than a mouse-era slop, and
     // the transcript scrolls under it while a turn streams: a scroll event
     // must not cancel the press (a real scroll drag still moves the pointer
@@ -9291,60 +9300,104 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }[ext] ?? "application/octet-stream";
     }
 
-    /** Read the whole file through the session's workspace-files API. */
-    async function presentedFileBlob(info) {
-      if (typeof fetch !== "function" || typeof Blob !== "function") throw new Error("download is unavailable");
-      const chunks = [];
-      let offset = 0;
-      let total = null;
-      for (let index = 0; index < PRESENTED_MAX_CHUNKS; index += 1) {
-        const rpcId = globalThis.crypto?.randomUUID?.()
-          ?? `rdsh-presented-${Date.now()}-${index}`;
-        const response = await fetch("/api/workspaceFiles/readBytes", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            type: "client-request",
-            rpcId,
-            method: "workspaceFiles/readBytes",
-            payload: {
-              args: {
-                workspaceFileScopeId: info.sessionId,
-                path: info.path,
-                options: { range: { offset, length: PRESENTED_CHUNK_BYTES } },
-              },
-            },
-          }),
+    /** Can this browser hand files to the OS share sheet at all? */
+    function presentedCanShareFiles(info) {
+      try {
+        if (typeof File !== "function") return false;
+        if (typeof navigator !== "object" || navigator === null) return false;
+        if (typeof navigator.share !== "function" || typeof navigator.canShare !== "function") return false;
+        return navigator.canShare({ files: [new File([], info.name, { type: presentedMimeType(info.name) })] });
+      } catch {
+        return false;
+      }
+    }
+
+    /**
+     * One chunk of the file, through the injected DSH remote when there is
+     * one (the connection the rest of DSH Web uses, including inside app
+     * WebViews) and through the gateway HTTP route otherwise. Both speak to
+     * the session's own workspace-files API, the same authority the preview
+     * reads through, so this adds no new host endpoint.
+     */
+    async function presentedReadChunk(info, offset) {
+      const remote = presentedRemote;
+      if (remote !== null && remote !== undefined
+        && remote.workspaceFiles !== undefined && typeof remote.workspaceFiles.readBytes === "function") {
+        const result = await remote.workspaceFiles.readBytes(info.sessionId, info.path, {
+          range: { offset, length: PRESENTED_CHUNK_BYTES },
         });
-        if (!response.ok) throw new Error(`read failed: ${response.status}`);
-        let meta;
-        let chunk = null;
-        const contentType = response.headers?.get?.("content-type") ?? "";
-        if (contentType.includes("multipart/form-data") && typeof response.formData === "function") {
-          // Uint8Array results travel as a metadata part plus one blob part
-          // per bytes value (attachments[0] names the part).
-          const form = await response.formData();
-          const raw = form.get("metadata");
-          meta = typeof raw === "string" ? JSON.parse(raw) : null;
-          const partName = meta?.attachments?.[0]?.part ?? "bytes-0";
-          const part = form.get(partName);
-          if (part === null || part === undefined) throw new Error("read failed: missing bytes");
-          chunk = typeof part === "string" ? new TextEncoder().encode(part) : await part.arrayBuffer();
-        } else {
-          meta = await response.json();
-          const data = meta?.result?.value?.data;
-          if (typeof data === "string") chunk = Uint8Array.from(atob(data), (ch) => ch.charCodeAt(0));
-          else if (Array.isArray(data)) chunk = new Uint8Array(data);
-        }
-        const result = meta?.result;
         if (result === null || result === undefined || result.ok !== true) {
           throw new Error(result?.error?.message ?? "read failed");
         }
         const value = result.value ?? {};
+        const data = value.data;
+        let chunk = null;
+        if (data instanceof Uint8Array) chunk = data;
+        else if (data instanceof ArrayBuffer) chunk = new Uint8Array(data);
+        else if (Array.isArray(data)) chunk = new Uint8Array(data);
+        else if (typeof data === "string") chunk = Uint8Array.from(atob(data), (ch) => ch.charCodeAt(0));
+        return { value, chunk };
+      }
+      if (typeof fetch !== "function") throw new Error("download is unavailable");
+      const rpcId = globalThis.crypto?.randomUUID?.()
+        ?? `rdsh-presented-${Date.now()}-${offset}`;
+      const response = await fetch("/api/workspaceFiles/readBytes", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          type: "client-request",
+          rpcId,
+          method: "workspaceFiles/readBytes",
+          payload: {
+            args: {
+              workspaceFileScopeId: info.sessionId,
+              path: info.path,
+              options: { range: { offset, length: PRESENTED_CHUNK_BYTES } },
+            },
+          },
+        }),
+      });
+      if (!response.ok) throw new Error(`read failed: ${response.status}`);
+      let meta;
+      let chunk = null;
+      const contentType = response.headers?.get?.("content-type") ?? "";
+      if (contentType.includes("multipart/form-data") && typeof response.formData === "function") {
+        // Uint8Array results travel as a metadata part plus one blob part
+        // per bytes value (attachments[0] names the part).
+        const form = await response.formData();
+        const raw = form.get("metadata");
+        meta = typeof raw === "string" ? JSON.parse(raw) : null;
+        const partName = meta?.attachments?.[0]?.part ?? "bytes-0";
+        const part = form.get(partName);
+        if (part === null || part === undefined) throw new Error("read failed: missing bytes");
+        chunk = typeof part === "string" ? new TextEncoder().encode(part) : await part.arrayBuffer();
+      } else {
+        meta = await response.json();
+        const data = meta?.result?.value?.data;
+        if (typeof data === "string") chunk = Uint8Array.from(atob(data), (ch) => ch.charCodeAt(0));
+        else if (Array.isArray(data)) chunk = new Uint8Array(data);
+      }
+      const result = meta?.result;
+      if (result === null || result === undefined || result.ok !== true) {
+        throw new Error(result?.error?.message ?? "read failed");
+      }
+      return { value: result.value ?? {}, chunk };
+    }
+
+    /** Read the whole file through the session's workspace-files API. */
+    async function presentedFileBlob(info) {
+      if (typeof Blob !== "function") throw new Error("download is unavailable");
+      const chunks = [];
+      let offset = 0;
+      let total = null;
+      for (let index = 0; index < PRESENTED_MAX_CHUNKS; index += 1) {
+        const { value, chunk } = await presentedReadChunk(info, offset);
         if (typeof value.bytes === "number") total = value.bytes;
+        if (total !== null && total > PRESENTED_MAX_BYTES) throw new Error("read failed: file is too large");
         const size = chunk?.byteLength ?? chunk?.length ?? 0;
         if (size > 0) chunks.push(chunk);
         offset += size;
+        if (offset > PRESENTED_MAX_BYTES) throw new Error("read failed: file is too large");
         if (value.eof === true) break;
         if (size === 0) throw new Error("read failed: empty chunk");
         if (total !== null && offset >= total) break;
@@ -9369,21 +9422,31 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     async function downloadPresentedFile(info, share = false) {
+      let blob;
       try {
-        const blob = await presentedFileBlob(info);
-        if (share && typeof File === "function" && typeof navigator === "object" && navigator !== null) {
-          const file = new File([blob], info.name, { type: blob.type });
-          if (typeof navigator.canShare === "function" && navigator.canShare({ files: [file] })
-            && typeof navigator.share === "function") {
-            await navigator.share({ files: [file] });
-            return;
+        blob = await presentedFileBlob(info);
+      } catch {
+        notify(t("presented.downloadFailed"));
+        return;
+      }
+      if (share) {
+        try {
+          if (!presentedCanShareFiles(info) || typeof File !== "function") {
+            throw new Error("share is unavailable");
           }
+          await navigator.share({ files: [new File([blob], info.name, { type: blob.type })] });
+          return;
+        } catch (error) {
+          // Closing the share sheet is the user's choice, not a failure.
+          // Anything else (lost user activation on a slow read, an OS
+          // refusal) still leaves the user the file, as a download.
+          if (error?.name === "AbortError") return;
         }
+      }
+      try {
         presentedSaveBlob(blob, info.name);
         notify(t("presented.downloadStarted"));
-      } catch (error) {
-        // Closing the share sheet is not a failure worth a toast.
-        if (error?.name === "AbortError") return;
+      } catch {
         notify(t("presented.downloadFailed"));
       }
     }
@@ -9445,7 +9508,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // the browser takes the gesture over (just before its contextmenu).
       // A cancel that arrives after most of the press has already elapsed
       // is that takeover, not a scroll: treat it as the completed press.
-      if (press !== null && Date.now() - press.since >= 400) {
+      if (press !== null && Date.now() - press.since >= PRESENTED_CANCEL_MIN_MS) {
         openPresentedMenu(press);
         armPresentedClickGuard(press.card);
       }
@@ -9500,6 +9563,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       item.setAttribute("data-rdsh-presented-menu-item", "");
       item.textContent = label;
       item.addEventListener("click", () => {
+        // Retire the long-press click guard first: an action that itself
+        // clicks the card (Preview) must not be swallowed by it.
+        clearPresentedClickGuard();
         action();
         closePresentedMenu(true);
       });
@@ -9513,11 +9579,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       menu.className = "rdsh-mux-files-menu";
       menu.setAttribute("data-rdsh-presented-menu", "");
       menu.setAttribute("role", "menu");
-      menu.setAttribute("aria-label", t("presented.menu"));
+      menu.setAttribute("aria-label", `${t("presented.menu")}: ${hit.name}`);
       const items = [];
       if (hit.sessionId !== "") {
         items.push(addPresentedMenuItem(menu, t("presented.download"), () => void downloadPresentedFile(hit)));
-        items.push(addPresentedMenuItem(menu, t("presented.share"), () => void downloadPresentedFile(hit, true)));
+        // Only offer Share where the browser can actually share files;
+        // elsewhere the item would silently turn into a download.
+        if (presentedCanShareFiles(hit)) {
+          items.push(addPresentedMenuItem(menu, t("presented.share"), () => void downloadPresentedFile(hit, true)));
+        }
       }
       items.push(addPresentedMenuItem(menu, t("presented.preview"), () => hit.preview?.click?.()));
       items.push(addPresentedMenuItem(menu, t("files.menu.copyPath"), () => copyFilesText(hit.path)));
@@ -15898,6 +15968,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         openPresentedMenu,
         closePresentedMenu,
         downloadPresentedFile,
+        setPresentedRemote: (remote) => { presentedRemote = remote ?? null; },
         presentedMenu: () => presentedMenu,
         filesMenu: () => filesMenu,
         filesSearch: () => filesSearch,
@@ -15935,6 +16006,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         });
         ctx.inject(["remote", "remote.permissionPresets"], (scope) => {
           if (phone()) void loadPermissionCatalog(scope.remote);
+        });
+        ctx.inject(["remote"], (scope) => {
+          presentedRemote = scope.remote ?? scope.get?.("remote") ?? null;
         });
         // The shared theme presenter can boot after this plugin. Resolve the
         // service through injection so a stored device choice is applied as
