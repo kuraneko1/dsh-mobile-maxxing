@@ -555,7 +555,7 @@ test("a finger drag in the terminal becomes a wheel event", () => {
 	assert.match(CLIENT, /wheel\.deltaY = -pixels \* TERMINAL_WHEEL_PER_PX/, "the wheel delta is not derived from the drag");
 	assert.match(CLIENT, /function onTouchMove\(event\) \{\s*\n\s*if \(moveTerminalDrag\(event\)\) return;/, "the bridge does not own the gesture");
 	assert.match(CLIENT, /function onTouchStart\(event\) \{\s*\n\s*startTerminalDrag\(event\);/, "no drag start");
-	assert.match(CLIENT, /function onEdgeSwipeEnd\(\) \{\s*\n\s*edgeSwipe = null;\s*\n\s*endTerminalDrag\(\);/, "the drag outlives the gesture");
+	assert.match(functionHead("onEdgeSwipeEnd", 500), /edgeSwipe = null;\s*\n\s*endTerminalDrag\(\);/, "the drag outlives the gesture");
 	// ...and the overscroll guard must stop cancelling the drags the bridge wants.
 	assert.match(CLIENT, /target\.closest\("textarea, input, \.xterm"\)\) return;/, "the overscroll guard still cancels terminal drags");
 	assert.match(CLIENT, /target\.closest\("input, textarea, \[contenteditable=true\], \.xterm/, "the back-swipe still claims terminal drags");

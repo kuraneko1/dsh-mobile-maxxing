@@ -5604,7 +5604,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      *
      * @returns {{container: Element, source: Element|null, back: boolean}|null}
      */
-    function routeDetailOf() {
+    function routeDetailOf(includeSplit = false) {
       for (const container of document.querySelectorAll("[data-plugin-detail], [data-plugin-item-detail], [data-plugin-row-detail]")) {
         if (routeLaidOut(container)) return { container, source: routeCrumbOf(container), back: false };
       }
@@ -5620,7 +5620,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       while (pane.parentElement !== null && pane.parentElement !== page) pane = pane.parentElement;
       const others = [...page.children].filter((child) => child !== pane);
       const listGone = others.length === 0 || others.some((child) => !routeLaidOut(child));
-      return listGone ? { container: page, source: close, back: true } : null;
+      return listGone || includeSplit ? { container: page, source: close, back: true } : null;
     }
 
     /**
@@ -9780,12 +9780,212 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       ) !== null;
     }
 
-    // Edge swipe from the left opens the session drawer; from the right it
+    // Mobile back navigation (#125). The SPA does not put its screens in the
+    // browser history. Keep one same-document guard, and resolve the visible
+    // screen at the time of Back instead of replaying previously used sessions.
+    const BACK_STATE = "dsh-mobile-maxxing:back";
+    let exitDialog = null;
+    let exitTimer = 0;
+    let lastBackSwipe = -Infinity;
+
+    function iosBackGesture() {
+      return /iPad|iPhone|iPod/.test(`${navigator.userAgent || ""} ${navigator.platform || ""}`)
+        || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    }
+
+    function closeExitDialog() {
+      clearTimeout(exitTimer);
+      exitTimer = 0;
+      const dialog = exitDialog;
+      exitDialog = null;
+      dialog?.remove();
+    }
+
+    function confirmMobileExit() {
+      if (exitDialog !== null) return;
+      const previousFocus = document.activeElement;
+      const dialog = document.createElement("dialog");
+      dialog.className = "rdsh-mux-exit";
+      dialog.setAttribute("aria-labelledby", "rdsh-mux-exit-title");
+      const title = document.createElement("h2");
+      title.id = "rdsh-mux-exit-title";
+      title.textContent = t("mux.back.confirm");
+      const message = document.createElement("p");
+      message.setAttribute("role", "status");
+      const actions = document.createElement("div");
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.textContent = t("mux.back.cancel");
+      const yes = document.createElement("button");
+      yes.type = "button";
+      yes.textContent = t("mux.back.yes");
+      const dismiss = () => {
+        closeExitDialog();
+        if (previousFocus?.isConnected) previousFocus.focus();
+      };
+      cancel.addEventListener("click", dismiss);
+      dialog.addEventListener("cancel", (event) => {
+        event.preventDefault();
+        dismiss();
+      });
+      yes.addEventListener("click", () => {
+        yes.disabled = true;
+        // Web content cannot kill an OS task. Do not shut down the host or
+        // navigate away to fake success when the browser refuses window.close.
+        try { window.close(); } catch { /* Show the same fallback below. */ }
+        exitTimer = window.setTimeout(() => {
+          exitTimer = 0;
+          if (exitDialog !== dialog || window.closed) return;
+          message.textContent = t("mux.back.manualClose");
+          cancel.focus();
+        }, 300);
+      });
+      actions.append(cancel, yes);
+      dialog.append(title, message, actions);
+      document.body.append(dialog);
+      exitDialog = dialog;
+      dialog.showModal();
+      cancel.focus();
+    }
+
+    function mobileBack() {
+      if (!phone()) return;
+      if (exitDialog !== null) {
+        closeExitDialog();
+        return;
+      }
+      if (document.querySelector("[data-rdsh-crop-overlay]") !== null) {
+        closeCropOverlay();
+        return;
+      }
+      // Modal/popover dismissal must not also navigate the underlying screen.
+      const overlays = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [data-shortcut-modal]')]
+        .filter(routeLaidOut);
+      const overlay = overlays.at(-1);
+      if (overlay !== undefined) {
+        const close = overlay.querySelector("[data-rdsh-settings-close]");
+        if (close !== null) close.click();
+        else (overlay.contains(document.activeElement) ? document.activeElement : overlay).dispatchEvent(new KeyboardEvent("keydown", {
+          key: "Escape", code: "Escape", bubbles: true, cancelable: true,
+        }));
+        return;
+      }
+      if (document.documentElement.getAttribute("data-rdsh-drawer") === "open") {
+        closeDrawer();
+        return;
+      }
+      const collapse = visibleCollapseButton();
+      if (collapse !== null && document.documentElement.hasAttribute("data-rdsh-rightpanel-open")) {
+        collapse.click();
+        return;
+      }
+      const detail = routeDetailOf(true);
+      if (detail !== null) {
+        // The plugin detail's first breadcrumb returns to its parent. This
+        // preserves the package -> plugin -> list hierarchy and translated UI.
+        const back = detail.source ?? detail.container.querySelector('button[class*="_crumb"]');
+        if (back !== null) back.click();
+        return;
+      }
+      const workspace = optionalService("uiWorkspace");
+      const layout = optionalService("layout");
+      const sessionId = workspace?.selection?.getSnapshot?.()?.sessionId ?? shownSessionId();
+      const blank = optionalService("sessions")?.list?.getSnapshot?.()?.byId?.[sessionId]?.blank === true;
+      const panelId = layout?.panelInfo?.getSnapshot?.()?.activePanelId;
+      if ((sessionId && !blank) || panelId != null) {
+        const workspaceId = optionalService("workspaces")?.list?.getSnapshot?.()?.items
+          ?.find((item) => item.sessionIds?.includes(sessionId))?.workspaceId;
+        if (sessionId && !blank && workspaceId != null) {
+          if (typeof workspace?.openWorkspace !== "function") {
+            mobileToast(t("mux.back.unavailable"));
+            return;
+          }
+          wantedSession = "";
+          wantedUntil = 0;
+          // The normal Workspace flow reuses its blank session, preserving
+          // the directory and any existing draft without clearing the source.
+          // Its service reports creation failures and keeps the old selection.
+          void Promise.resolve(workspace.openWorkspace(workspaceId)).catch(() => {});
+        } else if (panelId != null && (!sessionId || blank) && typeof layout?.selectPanel === "function") {
+          wantedSession = "";
+          wantedUntil = 0;
+          layout.selectPanel(null);
+        } else if (typeof workspace?.clearMain === "function") {
+          wantedSession = "";
+          wantedUntil = 0;
+          workspace.clearMain();
+        } else {
+          mobileToast(t("mux.back.unavailable"));
+        }
+        return;
+      }
+      // Wait for the workspace before deciding a booting screen is Home.
+      if (workspace === undefined || workspace === null) return;
+      confirmMobileExit();
+    }
+
+    function installMobileBack() {
+      const history = window.history;
+      if (!phone() || typeof history?.pushState !== "function") return () => {};
+      const withMarker = (level) => ({ ...history.state, [BACK_STATE]: level });
+      const supportedState = () => history.state == null
+        || (typeof history.state === "object" && !Array.isArray(history.state));
+      const guard = () => {
+        if (!supportedState()) return false;
+        try { history.pushState(withMarker("guard"), ""); return true; }
+        catch { return false; }
+      };
+      const arm = () => {
+        if (history.state?.[BACK_STATE] === "guard" || !supportedState()) return;
+        // Chrome may skip entries inserted before the user interacts. Wait
+        // for a trusted interaction when the activation API is available.
+        if (navigator.userActivation?.hasBeenActive === false) return;
+        try { history.replaceState(withMarker("base"), ""); guard(); }
+        catch { /* A denied History API must not break the mobile UI. */ }
+      };
+      const onInteraction = (event) => { if (event.isTrusted) arm(); };
+      const onBack = (event) => {
+        if (event.state?.[BACK_STATE] !== "base") return;
+        if (!guard()) return;
+        // Safari may report native history navigation for the same edge
+        // gesture. Whichever arrives first owns it; never go back twice.
+        edgeSwipe = null;
+        if (iosBackGesture() && Date.now() - lastBackSwipe < 600) return;
+        mobileBack();
+      };
+      arm();
+      window.addEventListener("popstate", onBack);
+      document.addEventListener("pointerdown", onInteraction, true);
+      document.addEventListener("pointerup", onInteraction, true);
+      document.addEventListener("keydown", onInteraction, true);
+      return () => {
+        window.removeEventListener("popstate", onBack);
+        document.removeEventListener("pointerdown", onInteraction, true);
+        document.removeEventListener("pointerup", onInteraction, true);
+        document.removeEventListener("keydown", onInteraction, true);
+        closeExitDialog();
+        // Retain the marker so a hot reload reuses this guard, not another one.
+      };
+    }
+
+    // Edge swipe from the left opens the session drawer on Android; on iOS
+    // it uses the same Back action as history navigation. From the right it
     // pulls the preview/right sidebar (the app's own "Open right sidebar").
     // While the preview is open the left-to-right gesture closes it instead.
     let edgeSwipe = null;
     function onEdgeSwipeStart(event) {
+      edgeSwipe = null;
       if (!phone() || event.touches.length !== 1) return;
+      const first = event.touches[0];
+      if (iosBackGesture() && first.clientX <= 36) {
+        lastBackSwipe = -Infinity;
+        if (event.target instanceof Element) {
+          if (event.target.closest('input, textarea, [contenteditable=true], .xterm, [data-dockkit-strip], [data-dockkit-tab]') !== null) return;
+          if (scrolledLeftAncestor(event.target) !== null) return;
+        }
+        edgeSwipe = { x: first.clientX, y: first.clientY, back: true, ready: false };
+        return;
+      }
       if (document.querySelector("[data-rdsh-lightbox], [data-rdsh-crop-overlay], [data-shortcut-modal=settings]") !== null) return;
       const touch = event.touches[0];
       const target = event.target;
@@ -9851,7 +10051,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight };
     }
     function onEdgeSwipeMove(event) {
-      if (edgeSwipe === null || event.touches.length !== 1) return;
+      if (event.touches.length !== 1) { edgeSwipe = null; return; }
+      if (edgeSwipe === null) return;
       // The mode is fixed, but a gesture can outlive the layout it started
       // in; a desktop page must not continue it.
       if (!phone()) {
@@ -9861,6 +10062,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const touch = event.touches[0];
       const dx = touch.clientX - edgeSwipe.x;
       const dy = touch.clientY - edgeSwipe.y;
+      if (edgeSwipe.back) {
+        if (Math.abs(dy) > 24 || dx < -10) { edgeSwipe = null; return; }
+        if (dx > 4 && event.cancelable) event.preventDefault();
+        edgeSwipe.ready = dx >= 64 && dx > Math.abs(dy) * 2;
+        return;
+      }
       // A vertical finger belongs to the list under it: drop the gesture and
       // let the scroll proceed. Once the movement is clearly horizontal the
       // page must not scroll, or opening the drawer also drags the session
@@ -9928,9 +10135,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clearTimeout(tabReplayTimer);
       cancelLongPress();
     }
-    function onEdgeSwipeEnd() {
+    function onEdgeSwipeEnd(event) {
+      const back = edgeSwipe?.back && edgeSwipe.ready && event?.type !== "touchcancel";
       edgeSwipe = null;
       endTerminalDrag();
+      if (back) {
+        lastBackSwipe = Date.now();
+        mobileBack();
+      }
     }
 
     // ---------------------------------------------------------------------
@@ -12754,7 +12966,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const id = url.searchParams.get("session");
         if (id === null || id === "") return "";
         url.searchParams.delete("session");
-        history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+        history.replaceState(history.state, "", `${url.pathname}${url.search}${url.hash}`);
         return id;
       } catch {
         return "";
@@ -13363,6 +13575,22 @@ html[data-rdsh-device-mode="mobile"] body > [role="alert"]:has([data-rdsh-notice
 html[data-rdsh-device-mode="mobile"] body > [role="alert"]:has([data-rdsh-notice-icon]) > span:last-child { display: flex; flex: 1 1 auto; align-items: center; min-width: 0; }
 html[data-rdsh-device-mode="mobile"] body > [role="alert"]:has([data-rdsh-notice-icon]) button { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; align-self: center; min-height: 44px; min-width: 56px; margin-left: auto; padding: 6px 12px; border: 1px solid currentColor; border-radius: 9px; font: inherit; font-weight: 600; text-decoration: none; }
 html[data-rdsh-device-mode="mobile"] [data-rdsh-notice-icon] { width: 18px; height: 18px; }
+.rdsh-mux-exit {
+  box-sizing: border-box; width: min(360px, calc(100vw - 32px));
+  border: 1px solid var(--dsw-alias-border-l3, #888); border-radius: 16px;
+  padding: 24px; color: var(--dsw-alias-label-primary, #222);
+  background: var(--dsw-alias-background-primary, Canvas); font: inherit;
+}
+.rdsh-mux-exit::backdrop { background: rgba(0,0,0,.45); }
+.rdsh-mux-exit h2 { margin: 0 0 16px; font-size: 18px; }
+.rdsh-mux-exit p { line-height: 1.6; }
+.rdsh-mux-exit p:empty { display: none; }
+.rdsh-mux-exit > div { display: flex; justify-content: flex-end; gap: 12px; }
+.rdsh-mux-exit button {
+  min-height: 44px; padding: 8px 16px; border: 1px solid currentColor;
+  border-radius: 8px; color: inherit; background: transparent; font: inherit;
+}
+.rdsh-mux-exit button:disabled { opacity: .5; }
 /* Controls the hide list matched. The attribute these selectors key off is
    written only while phone() holds (see applyHideList), and the rules sit in
    the mobile sheet as well: a desktop keeps every control. */
@@ -15130,6 +15358,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         navigator.serviceWorker?.addEventListener("message", onWorkerMessage);
         const bootSession = sessionFromUrl();
         if (bootSession !== "") requestSession(bootSession);
+        const disposeMobileBack = installMobileBack();
         document.addEventListener("touchstart", onTouchStart, { capture: true, passive: true });
         document.addEventListener("touchmove", onTouchMove, { capture: true, passive: false });
         measureSafeArea();
@@ -15401,6 +15630,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
 
         return () => {
           try {
+            disposeMobileBack();
             observer.disconnect();
             unwatchActivitySources();
             clearActivityPanel();
