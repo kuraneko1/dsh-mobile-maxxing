@@ -9277,17 +9277,59 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return { preview, path, name: filesBaseName(path), sessionId };
     }
 
-    /** The presented card a press would act on, or null outside one. */
+    /** The session a transcript element belongs to, or "" when unknown. */
+    function presentedSessionId(element) {
+      const scope = element?.closest?.("[data-conversation-session]");
+      return String(scope?.getAttribute?.("data-conversation-session") ?? "").trim();
+    }
+
+    /** An absolute path from a button title, or "" when it is not one. */
+    function presentedAbsolutePath(value) {
+      const path = String(value ?? "").replace(/\\/g, "/").trim();
+      return path.startsWith("/") || /^[A-Za-z]:\//.test(path) ? path : "";
+    }
+
+    /** A path-shaped button label (tool file links), or "" when not one. */
+    function presentedLinkedPath(text) {
+      const path = String(text ?? "").trim();
+      if (path === "" || path.length > 300 || /\s/.test(path)) return "";
+      if (!path.includes("/") || /^https?:\/\//i.test(path)) return "";
+      const last = path.split("/").pop() ?? "";
+      return /^[^/]+\.[A-Za-z0-9]{1,12}$/.test(last) ? path : "";
+    }
+
+    /**
+     * What a long press would act on: a presented card, a file mention in
+     * the message text (a button whose title is the absolute path), or a
+     * tool call's file link (a path-shaped button inside a tool row). All
+     * three open the same file upstream, so all three get the same menu.
+     */
     function presentedCardAt(target) {
       if (!phone()) return null;
       if (target === null || target === undefined || target.closest === undefined) return null;
       // The card's own action buttons keep their upstream menus.
       if (target.closest('[data-slot="deliverables.file.actions"]') !== null) return null;
       const card = target.closest("[data-presented-file]");
-      if (card === null) return null;
-      const info = presentedInfo(card);
-      if (info.path === "") return null;
-      return { ...info, card, anchor: info.preview ?? card };
+      if (card !== null) {
+        const info = presentedInfo(card);
+        if (info.path === "") return null;
+        return { ...info, card, anchor: info.preview ?? card };
+      }
+      const titled = target.closest("button[title]");
+      if (titled !== null) {
+        const path = presentedAbsolutePath(titled.getAttribute("title") ?? titled.title);
+        if (path !== "") {
+          return { preview: titled, path, name: filesBaseName(path), sessionId: presentedSessionId(titled), card: titled, anchor: titled };
+        }
+      }
+      const button = target.closest("button");
+      if (button !== null && button.closest("[data-tool]") !== null) {
+        const path = presentedLinkedPath(button.textContent);
+        if (path !== "") {
+          return { preview: button, path, name: filesBaseName(path), sessionId: presentedSessionId(button), card: button, anchor: button };
+        }
+      }
+      return null;
     }
 
     function presentedMimeType(name) {
@@ -9421,7 +9463,33 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       setTimeout(() => urlApi.revokeObjectURL?.(url), 60000);
     }
 
+    /** The host's streamed download for this file (see lib/mobile-ux.js). */
+    function presentedDownloadUrl(info) {
+      return `/api/rdsh-mobile-ux/download?sessionId=${encodeURIComponent(info.sessionId)}&path=${encodeURIComponent(info.path)}`;
+    }
+
+    /**
+     * Download through the host route: a real HTTP download in the same
+     * tap, so the browser's own download handling (and its user-gesture
+     * rules) applies instead of a blob created after an async read.
+     */
+    function presentedDownloadViaEndpoint(info) {
+      const anchor = document.createElement("a");
+      anchor.href = presentedDownloadUrl(info);
+      anchor.download = info.name;
+      anchor.rel = "noopener";
+      document.body.append(anchor);
+      anchor.click?.();
+      anchor.remove();
+      notify(t("presented.downloadStarted"));
+    }
+
     async function downloadPresentedFile(info, share = false) {
+      // A plain download needs no bytes in hand: let the host stream it.
+      if (!share && info.sessionId !== "") {
+        presentedDownloadViaEndpoint(info);
+        return;
+      }
       let blob;
       try {
         blob = await presentedFileBlob(info);
@@ -9444,8 +9512,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         }
       }
       try {
-        presentedSaveBlob(blob, info.name);
-        notify(t("presented.downloadStarted"));
+        if (info.sessionId !== "") presentedDownloadViaEndpoint(info);
+        else {
+          presentedSaveBlob(blob, info.name);
+          notify(t("presented.downloadStarted"));
+        }
       } catch {
         notify(t("presented.downloadFailed"));
       }
@@ -15968,6 +16039,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         openPresentedMenu,
         closePresentedMenu,
         downloadPresentedFile,
+        presentedDownloadUrl,
         setPresentedRemote: (remote) => { presentedRemote = remote ?? null; },
         presentedMenu: () => presentedMenu,
         filesMenu: () => filesMenu,

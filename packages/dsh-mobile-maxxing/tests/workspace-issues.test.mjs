@@ -1568,6 +1568,52 @@ test("presented: transcript scroll while holding does not cancel the press", () 
 });
 
 
+
+test("presented: file mentions and tool file links open the same menu", async () => {
+	const run = boot();
+	run.reset();
+	const scope = element(run.document, "div", { "data-conversation-session": "session-1" });
+	const mention = element(run.document, "button", { title: "/work/repo/notes.txt" });
+	mention.append(run.document.createTextNode("notes.txt"));
+	const tool = element(run.document, "div", { "data-tool": "run_code" });
+	const toolLink = element(run.document, "button");
+	toolLink.append(run.document.createTextNode("output/result.json"));
+	tool.append(toolLink);
+	const other = element(run.document, "button", { title: "Show the original image" });
+	scope.append(mention, tool, other);
+	run.document.body.append(scope);
+	run.tools.installWorkspaceTools();
+
+	run.document.dispatchEvent(event("pointerdown", mention, { pointerType: "touch", clientX: 10, clientY: 10 }));
+	run.runTimers(500);
+	let menu = run.document.querySelector("[data-rdsh-presented-menu]");
+	assert.ok(menu, "a file mention did not open the menu");
+	const copyItem = [...menu.querySelectorAll("button")].find((item) => item.textContent === COPY.en["files.menu.copyPath"]);
+	copyItem.dispatchEvent(event("click", copyItem));
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(run.copied, ["/work/repo/notes.txt"], "the mention path was not copied");
+
+	run.document.dispatchEvent(event("pointerdown", toolLink, { pointerType: "touch", clientX: 10, clientY: 10 }));
+	run.runTimers(500);
+	menu = run.document.querySelector("[data-rdsh-presented-menu]");
+	assert.ok(menu, "a tool file link did not open the menu");
+	run.tools.closePresentedMenu();
+
+	run.document.dispatchEvent(event("pointerdown", other, { pointerType: "touch", clientX: 10, clientY: 10 }));
+	run.runTimers(500);
+	assert.equal(run.document.querySelector("[data-rdsh-presented-menu]"), null, "a non-path titled button became a target");
+});
+
+test("presented: the download URL is the host route with an encoded path", () => {
+	const run = boot();
+	run.reset();
+	assert.equal(
+		run.tools.presentedDownloadUrl({ sessionId: "session 1", path: "/work/repo/a b.md", name: "a b.md" }),
+		"/api/rdsh-mobile-ux/download?sessionId=session%201&path=%2Fwork%2Frepo%2Fa%20b.md",
+	);
+});
+
 test("presented: Preview from the menu is not swallowed by the click guard", () => {
 	const run = boot();
 	run.reset();
@@ -1615,7 +1661,7 @@ test("presented: Share falls back to a download when sharing is refused", async 
 	run.sandbox.URL.createObjectURL = (blob) => { saved.push(blob); return "blob:fake"; };
 	run.sandbox.URL.revokeObjectURL = () => {};
 
-	await run.tools.downloadPresentedFile({ sessionId: "session-1", path: "/work/repo/report.md", name: "report.md" }, true);
+	await run.tools.downloadPresentedFile({ sessionId: "", path: "/work/repo/report.md", name: "report.md" }, true);
 	assert.equal(saved.length, 1, "a refused share did not fall back to a download");
 	run.runTimers(60000);
 });
@@ -1639,9 +1685,9 @@ test("presented: the injected remote reads chunks and the size cap stops huge fi
 			},
 		},
 	});
-	await run.tools.downloadPresentedFile({ sessionId: "session-1", path: "/work/repo/report.md", name: "report.md" });
+	await run.tools.downloadPresentedFile({ sessionId: "", path: "/work/repo/report.md", name: "report.md" }, true);
 	assert.equal(calls.length, 1);
-	assert.equal(calls[0].sessionId, "session-1");
+	assert.equal(calls[0].sessionId, "");
 	assert.equal(calls[0].path, "/work/repo/report.md");
 	assert.equal(calls[0].options.range.offset, 0);
 	assert.equal(calls[0].options.range.length, 262144);
@@ -1654,7 +1700,7 @@ test("presented: the injected remote reads chunks and the size cap stops huge fi
 			readBytes: async () => ({ ok: true, value: { data: [1], bytes: 100 * 1024 * 1024, offset: 0, eof: false } }),
 		},
 	});
-	await run.tools.downloadPresentedFile({ sessionId: "session-1", path: "/work/repo/big.mp4", name: "big.mp4" });
+	await run.tools.downloadPresentedFile({ sessionId: "", path: "/work/repo/big.mp4", name: "big.mp4" });
 	assert.equal(saved.length, 1, "an over-cap file was still handed to the browser");
 	run.runTimers(60000);
 });
@@ -1695,14 +1741,14 @@ test("presented: download assembles the file from readBytes chunks", async () =>
 	run.sandbox.URL.revokeObjectURL = () => {};
 
 	await run.tools.downloadPresentedFile({
-		sessionId: "session-1",
+		sessionId: "",
 		path: "/work/repo/report.md",
 		name: "report.md",
-	});
+	}, true);
 	assert.equal(calls.length, 1, "download did not stop at eof");
 	assert.equal(calls[0].url, "/api/workspaceFiles/readBytes");
 	assert.equal(calls[0].body.method, "workspaceFiles/readBytes");
-	assert.equal(calls[0].body.payload.args.workspaceFileScopeId, "session-1");
+	assert.equal(calls[0].body.payload.args.workspaceFileScopeId, "");
 	assert.equal(calls[0].body.payload.args.path, "/work/repo/report.md");
 	assert.deepEqual(calls[0].body.payload.args.options, { range: { offset: 0, length: 262144 } });
 	assert.equal(saved.length, 1, "download did not hand a blob to the browser");
