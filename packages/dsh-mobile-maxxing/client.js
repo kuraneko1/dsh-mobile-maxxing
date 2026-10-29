@@ -9201,6 +9201,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       document.addEventListener("scroll", onFilesScroll, true);
       document.addEventListener("contextmenu", onFilesContextMenu, true);
       window.addEventListener("pagehide", onWorkspacePageHide);
+      installPresentedTools();
     }
 
     function onWorkspacePageHide(event) {
@@ -9221,11 +9222,390 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         document.removeEventListener("contextmenu", onFilesContextMenu, true);
         window.removeEventListener("pagehide", onWorkspacePageHide);
       }
+      disposePresentedTools();
       stopWorkspacePickerWatch();
       clearWorkspacePicker();
       teardownWorkspaceFiles();
     }
 
+
+
+    // ---------------------------------------------------------------------
+    // Presented (deliverable) files in the transcript: long-press menu with
+    // a real download.
+    //
+    // Upstream renders a delivered file as [data-presented-file]: a preview
+    // <button> whose title is the file's absolute path, plus an actions slot
+    // ([data-slot="deliverables.file.actions"]). It is a button, not a link,
+    // so a phone browser or WebView offers no native long-press download for
+    // it and a tap only opens the sidebar preview. This menu keeps that tap
+    // intact and adds Download / Share / Preview / Copy path behind a long
+    // press on the rest of the card.
+    //
+    // Bytes come from the session's own workspace-files API
+    // (workspaceFiles/readBytes in chunks), the same authority the preview
+    // reads through, so this adds no new host endpoint and cannot read a
+    // file the preview could not.
+    // ---------------------------------------------------------------------
+    const PRESENTED_CHUNK_BYTES = 262144;
+    const PRESENTED_MAX_CHUNKS = 2048;
+    let presentedPress = null;
+    let presentedMenu = null;
+    let presentedClickGuard = null;
+    let presentedToolsInstalled = false;
+
+    /** What a presented card points at, from upstream's stable hooks only. */
+    function presentedInfo(card) {
+      const preview = card.querySelector("button[title]");
+      const path = String(preview?.getAttribute?.("title") ?? preview?.title ?? "").trim();
+      const scope = card.closest("[data-conversation-session]");
+      const sessionId = String(scope?.getAttribute?.("data-conversation-session") ?? "").trim();
+      return { preview, path, name: filesBaseName(path), sessionId };
+    }
+
+    /** The presented card a press would act on, or null outside one. */
+    function presentedCardAt(target) {
+      if (!phone()) return null;
+      if (target === null || target === undefined || target.closest === undefined) return null;
+      // The card's own action buttons keep their upstream menus.
+      if (target.closest('[data-slot="deliverables.file.actions"]') !== null) return null;
+      const card = target.closest("[data-presented-file]");
+      if (card === null) return null;
+      const info = presentedInfo(card);
+      if (info.path === "") return null;
+      return { ...info, card, anchor: info.preview ?? card };
+    }
+
+    function presentedMimeType(name) {
+      const ext = String(name ?? "").toLowerCase().split(".").pop() ?? "";
+      return {
+        txt: "text/plain", log: "text/plain", md: "text/markdown", json: "application/json",
+        csv: "text/csv", html: "text/html", png: "image/png", jpg: "image/jpeg",
+        jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
+        pdf: "application/pdf", zip: "application/zip", mp4: "video/mp4", mp3: "audio/mpeg",
+      }[ext] ?? "application/octet-stream";
+    }
+
+    /** Read the whole file through the session's workspace-files API. */
+    async function presentedFileBlob(info) {
+      if (typeof fetch !== "function" || typeof Blob !== "function") throw new Error("download is unavailable");
+      const chunks = [];
+      let offset = 0;
+      let total = null;
+      for (let index = 0; index < PRESENTED_MAX_CHUNKS; index += 1) {
+        const rpcId = globalThis.crypto?.randomUUID?.()
+          ?? `rdsh-presented-${Date.now()}-${index}`;
+        const response = await fetch("/api/workspaceFiles/readBytes", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            type: "client-request",
+            rpcId,
+            method: "workspaceFiles/readBytes",
+            payload: {
+              args: {
+                workspaceFileScopeId: info.sessionId,
+                path: info.path,
+                options: { range: { offset, length: PRESENTED_CHUNK_BYTES } },
+              },
+            },
+          }),
+        });
+        if (!response.ok) throw new Error(`read failed: ${response.status}`);
+        let meta;
+        let chunk = null;
+        const contentType = response.headers?.get?.("content-type") ?? "";
+        if (contentType.includes("multipart/form-data") && typeof response.formData === "function") {
+          // Uint8Array results travel as a metadata part plus one blob part
+          // per bytes value (attachments[0] names the part).
+          const form = await response.formData();
+          const raw = form.get("metadata");
+          meta = typeof raw === "string" ? JSON.parse(raw) : null;
+          const partName = meta?.attachments?.[0]?.part ?? "bytes-0";
+          const part = form.get(partName);
+          if (part === null || part === undefined) throw new Error("read failed: missing bytes");
+          chunk = typeof part === "string" ? new TextEncoder().encode(part) : await part.arrayBuffer();
+        } else {
+          meta = await response.json();
+          const data = meta?.result?.value?.data;
+          if (typeof data === "string") chunk = Uint8Array.from(atob(data), (ch) => ch.charCodeAt(0));
+          else if (Array.isArray(data)) chunk = new Uint8Array(data);
+        }
+        const result = meta?.result;
+        if (result === null || result === undefined || result.ok !== true) {
+          throw new Error(result?.error?.message ?? "read failed");
+        }
+        const value = result.value ?? {};
+        if (typeof value.bytes === "number") total = value.bytes;
+        const size = chunk?.byteLength ?? chunk?.length ?? 0;
+        if (size > 0) chunks.push(chunk);
+        offset += size;
+        if (value.eof === true) break;
+        if (size === 0) throw new Error("read failed: empty chunk");
+        if (total !== null && offset >= total) break;
+        if (index === PRESENTED_MAX_CHUNKS - 1) throw new Error("read failed: file is too large");
+      }
+      return new Blob(chunks, { type: presentedMimeType(info.name) });
+    }
+
+    /** Hand a downloaded blob to the browser under the file's own name. */
+    function presentedSaveBlob(blob, name) {
+      const urlApi = globalThis.URL;
+      if (urlApi === undefined || typeof urlApi.createObjectURL !== "function") throw new Error("download is unavailable");
+      const url = urlApi.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = name;
+      anchor.rel = "noopener";
+      document.body.append(anchor);
+      anchor.click?.();
+      anchor.remove();
+      setTimeout(() => urlApi.revokeObjectURL?.(url), 60000);
+    }
+
+    async function downloadPresentedFile(info, share = false) {
+      try {
+        const blob = await presentedFileBlob(info);
+        if (share && typeof File === "function" && typeof navigator === "object" && navigator !== null) {
+          const file = new File([blob], info.name, { type: blob.type });
+          if (typeof navigator.canShare === "function" && navigator.canShare({ files: [file] })
+            && typeof navigator.share === "function") {
+            await navigator.share({ files: [file] });
+            return;
+          }
+        }
+        presentedSaveBlob(blob, info.name);
+        notify(t("presented.downloadStarted"));
+      } catch (error) {
+        // Closing the share sheet is not a failure worth a toast.
+        if (error?.name === "AbortError") return;
+        notify(t("presented.downloadFailed"));
+      }
+    }
+
+    function cancelPresentedPress() {
+      if (presentedPress === null) return;
+      if (presentedPress.timer !== 0) clearTimeout(presentedPress.timer);
+      presentedPress = null;
+    }
+
+    function presentedSamePointer(event) {
+      if (presentedPress === null) return false;
+      if (presentedPress.pointerId === null) return true;
+      return typeof event.pointerId !== "number" || event.pointerId === presentedPress.pointerId;
+    }
+
+    function onPresentedPointerDown(event) {
+      if (!phone() || event.pointerType === "mouse" || event.isPrimary === false) return;
+      if (presentedMenu !== null && presentedMenu.node.contains(event.target)) return;
+      if (presentedPress !== null && !presentedSamePointer(event)) return;
+      if (presentedMenu !== null) closePresentedMenu();
+      const hit = presentedCardAt(event.target);
+      if (hit === null) return;
+      cancelPresentedPress();
+      presentedPress = {
+        ...hit,
+        x: typeof event.clientX === "number" ? event.clientX : 0,
+        y: typeof event.clientY === "number" ? event.clientY : 0,
+        pointerId: typeof event.pointerId === "number" ? event.pointerId : null,
+        timer: 0,
+      };
+      presentedPress.timer = setTimeout(() => {
+        if (presentedPress === null) return;
+        const press = presentedPress;
+        presentedPress = null;
+        openPresentedMenu(press);
+        armPresentedClickGuard(press.card);
+      }, FILES_PRESS_MS);
+    }
+
+    function onPresentedPointerMove(event) {
+      if (!presentedSamePointer(event) || event.isPrimary === false) return;
+      const dx = (typeof event.clientX === "number" ? event.clientX : 0) - presentedPress.x;
+      const dy = (typeof event.clientY === "number" ? event.clientY : 0) - presentedPress.y;
+      if (Math.hypot(dx, dy) > FILES_PRESS_SLOP_PX) cancelPresentedPress();
+    }
+
+    function onPresentedPointerUp(event) {
+      if (!presentedSamePointer(event)) return;
+      cancelPresentedPress();
+    }
+
+    function onPresentedPointerCancel(event) {
+      if (!presentedSamePointer(event)) return;
+      cancelPresentedPress();
+    }
+
+    function onPresentedScroll() {
+      // A press is positional; any scroll while the finger is down ends it.
+      // An open menu is left alone: the transcript streams and scrolls on
+      // its own, and the menu must not vanish from under the reader.
+      cancelPresentedPress();
+    }
+
+    function onPresentedContextMenu(event) {
+      if (!phone()) return;
+      const target = event.target;
+      if (target === null || target === undefined || target.closest === undefined) return;
+      if (presentedMenu !== null && presentedMenu.node.contains(target)) {
+        event.preventDefault();
+        return;
+      }
+      const hit = presentedCardAt(target);
+      if (hit === null) return;
+      event.preventDefault();
+      if (typeof event.stopPropagation === "function") event.stopPropagation();
+      cancelPresentedPress();
+      if (presentedMenu !== null && presentedMenu.anchor === hit.anchor) return;
+      closePresentedMenu();
+      openPresentedMenu(hit);
+    }
+
+    /** The click that ends a long press must not also open the preview. */
+    function onPresentedCardClickGuard(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      clearPresentedClickGuard();
+    }
+
+    function clearPresentedClickGuard() {
+      const guard = presentedClickGuard;
+      presentedClickGuard = null;
+      if (guard === null) return;
+      if (guard.timer !== 0) clearTimeout(guard.timer);
+      guard.card.removeEventListener("click", onPresentedCardClickGuard, true);
+    }
+
+    function armPresentedClickGuard(card) {
+      clearPresentedClickGuard();
+      const guard = { card, timer: 0 };
+      presentedClickGuard = guard;
+      guard.timer = setTimeout(clearPresentedClickGuard, 900);
+      card.addEventListener("click", onPresentedCardClickGuard, true);
+    }
+
+    function addPresentedMenuItem(menu, label, action) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.setAttribute("role", "menuitem");
+      item.setAttribute("data-rdsh-presented-menu-item", "");
+      item.textContent = label;
+      item.addEventListener("click", () => {
+        action();
+        closePresentedMenu(true);
+      });
+      menu.append(item);
+      return item;
+    }
+
+    function openPresentedMenu(hit) {
+      closePresentedMenu();
+      const menu = document.createElement("div");
+      menu.className = "rdsh-mux-files-menu";
+      menu.setAttribute("data-rdsh-presented-menu", "");
+      menu.setAttribute("role", "menu");
+      menu.setAttribute("aria-label", t("presented.menu"));
+      const items = [];
+      if (hit.sessionId !== "") {
+        items.push(addPresentedMenuItem(menu, t("presented.download"), () => void downloadPresentedFile(hit)));
+        items.push(addPresentedMenuItem(menu, t("presented.share"), () => void downloadPresentedFile(hit, true)));
+      }
+      items.push(addPresentedMenuItem(menu, t("presented.preview"), () => hit.preview?.click?.()));
+      items.push(addPresentedMenuItem(menu, t("files.menu.copyPath"), () => copyFilesText(hit.path)));
+      document.body.append(menu);
+      const rect = typeof hit.anchor.getBoundingClientRect === "function"
+        ? hit.anchor.getBoundingClientRect()
+        : { left: 12, top: 12, bottom: 12, right: 12 };
+      const insetLeft = safeInset("left");
+      const insetRight = safeInset("right");
+      const floor = safeInset("top") + 12;
+      const width = Math.min(240, Math.max(160, window.innerWidth - insetLeft - insetRight - 24));
+      menu.style.width = `${width}px`;
+      const height = typeof menu.getBoundingClientRect === "function" ? menu.getBoundingClientRect().height : 0;
+      let top = rect.bottom + 6;
+      if (height > 0 && top + height > window.innerHeight - 12) top = Math.max(floor, rect.top - height - 6);
+      const left = Math.min(Math.max(insetLeft + 12, rect.left), Math.max(insetLeft + 12, window.innerWidth - insetRight - width - 12));
+      menu.style.top = `${Math.round(top)}px`;
+      menu.style.left = `${Math.round(left)}px`;
+      presentedMenu = { node: menu, anchor: hit.anchor, items };
+      items[0]?.focus?.();
+      document.addEventListener("pointerdown", onPresentedMenuPointerDown, true);
+      document.addEventListener("keydown", onPresentedMenuKeyDown, true);
+    }
+
+    function closePresentedMenu(restoreFocus = false) {
+      const current = presentedMenu;
+      presentedMenu = null;
+      clearPresentedClickGuard();
+      if (current === null) return;
+      document.removeEventListener("pointerdown", onPresentedMenuPointerDown, true);
+      document.removeEventListener("keydown", onPresentedMenuKeyDown, true);
+      current.node.remove();
+      if (restoreFocus && current.anchor.isConnected !== false && typeof current.anchor.focus === "function") {
+        current.anchor.focus({ preventScroll: true });
+      }
+    }
+
+    function onPresentedMenuPointerDown(event) {
+      if (presentedMenu === null) return;
+      if (presentedMenu.node.contains(event.target)) return;
+      closePresentedMenu();
+    }
+
+    function onPresentedMenuKeyDown(event) {
+      const current = presentedMenu;
+      if (current === null) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closePresentedMenu(true);
+        return;
+      }
+      const items = current.items;
+      if (items.length === 0) return;
+      const at = items.indexOf(document.activeElement);
+      if (event.key === "Tab") {
+        event.stopPropagation();
+        closePresentedMenu(true);
+        return;
+      }
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      let next;
+      if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = items.length - 1;
+      else if (at === -1) next = event.key === "ArrowDown" ? 0 : items.length - 1;
+      else next = (at + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+      items[next]?.focus?.();
+    }
+
+    /** Document-level listeners for presented cards; phone-only, installed once. */
+    function installPresentedTools() {
+      if (presentedToolsInstalled || !phone()) return;
+      presentedToolsInstalled = true;
+      document.addEventListener("pointerdown", onPresentedPointerDown, true);
+      document.addEventListener("pointermove", onPresentedPointerMove, true);
+      document.addEventListener("pointerup", onPresentedPointerUp, true);
+      document.addEventListener("pointercancel", onPresentedPointerCancel, true);
+      document.addEventListener("scroll", onPresentedScroll, true);
+      document.addEventListener("contextmenu", onPresentedContextMenu, true);
+    }
+
+    function disposePresentedTools() {
+      if (presentedToolsInstalled) {
+        presentedToolsInstalled = false;
+        document.removeEventListener("pointerdown", onPresentedPointerDown, true);
+        document.removeEventListener("pointermove", onPresentedPointerMove, true);
+        document.removeEventListener("pointerup", onPresentedPointerUp, true);
+        document.removeEventListener("pointercancel", onPresentedPointerCancel, true);
+        document.removeEventListener("scroll", onPresentedScroll, true);
+        document.removeEventListener("contextmenu", onPresentedContextMenu, true);
+      }
+      closePresentedMenu();
+      cancelPresentedPress();
+    }
 
     // Draw corner-only patches below the queue row. The composer itself is never changed.
     function decorateQueueJoin(panel, dock) {
@@ -15508,6 +15888,11 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         runFilesSearch,
         installWorkspaceTools,
         disposeWorkspaceTools,
+        presentedCardAt,
+        openPresentedMenu,
+        closePresentedMenu,
+        downloadPresentedFile,
+        presentedMenu: () => presentedMenu,
         filesMenu: () => filesMenu,
         filesSearch: () => filesSearch,
       };

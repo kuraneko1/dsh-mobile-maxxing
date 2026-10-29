@@ -584,6 +584,27 @@ function filesTree(document) {
 	return { panel, root, header, path, body, src, app, readme };
 }
 
+
+/**
+ * The upstream presented (deliverable) file card, using its real data hooks:
+ * a conversation scope, [data-presented-file], a preview button whose title
+ * is the absolute path, and the deliverables actions slot.
+ */
+function presentedCard(document) {
+	const scope = element(document, "div", { "data-conversation-session": "session-1" });
+	const card = element(document, "div", { "data-presented-file": "true" });
+	const preview = element(document, "button", { title: "/work/repo/report.md" });
+	const name = element(document, "span");
+	name.append(document.createTextNode("report.md"));
+	const actions = element(document, "div", { "data-slot": "deliverables.file.actions" });
+	const more = element(document, "button", { "data-open-path-more": "" });
+	actions.append(more);
+	card.append(preview, name, actions);
+	scope.append(card);
+	document.body.append(scope);
+	return { scope, card, preview, actions, more };
+}
+
 // ---------------------------------------------------------------------------
 // #39 — picker: sync decoration, no inline anchoring, cleanup
 // ---------------------------------------------------------------------------
@@ -1469,6 +1490,103 @@ test("#42 contextmenu opens the copy menu and prevents the native one", () => {
 	assert.equal(run.document.querySelector("[data-rdsh-file-menu]"), null, "an unrelated contextmenu opened a menu");
 });
 
+
+// ---------------------------------------------------------------------------
+// Presented files — long-press download menu
+// ---------------------------------------------------------------------------
+
+test("presented: a 500ms press on a delivered file opens the download menu", async () => {
+	const run = boot();
+	run.reset();
+	const presented = presentedCard(run.document);
+	run.tools.installWorkspaceTools();
+
+	run.document.dispatchEvent(event("pointerdown", presented.preview, { pointerType: "touch", clientX: 10, clientY: 10 }));
+	run.runTimers(500);
+	const menu = run.document.querySelector("[data-rdsh-presented-menu]");
+	assert.ok(menu, "the long press did not open a presented-file menu");
+	const items = [...menu.querySelectorAll("button")];
+	assert.deepEqual(items.map((item) => item.textContent), [
+		COPY.en["presented.download"],
+		COPY.en["presented.share"],
+		COPY.en["presented.preview"],
+		COPY.en["files.menu.copyPath"],
+	]);
+
+	items[3].dispatchEvent(event("click", items[3]));
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.deepEqual(run.copied, ["/work/repo/report.md"], "copy path did not copy the presented file path");
+	assert.equal(run.document.querySelector("[data-rdsh-presented-menu]"), null, "the menu stayed open after choosing");
+});
+
+test("presented: movement cancels the press and the actions slot is not a target", () => {
+	const run = boot();
+	run.reset();
+	const presented = presentedCard(run.document);
+	run.tools.installWorkspaceTools();
+
+	run.document.dispatchEvent(event("pointerdown", presented.preview, { pointerType: "touch", clientX: 10, clientY: 10 }));
+	run.document.dispatchEvent(event("pointermove", presented.preview, { pointerType: "touch", clientX: 40, clientY: 10 }));
+	run.runTimers(500);
+	assert.equal(run.document.querySelector("[data-rdsh-presented-menu]"), null, "a moved press still opened the menu");
+
+	run.document.dispatchEvent(event("pointerdown", presented.more, { pointerType: "touch", clientX: 10, clientY: 10 }));
+	run.runTimers(500);
+	assert.equal(run.document.querySelector("[data-rdsh-presented-menu]"), null, "the upstream actions slot became a long-press target");
+});
+
+test("presented: download assembles the file from readBytes chunks", async () => {
+	const run = boot();
+	run.reset();
+	const presented = presentedCard(run.document);
+	run.tools.installWorkspaceTools();
+	const calls = [];
+	run.sandbox.Blob = Blob;
+	run.sandbox.fetch = async (url, options) => {
+		calls.push({ url, body: JSON.parse(options.body) });
+		const metadata = JSON.stringify({
+			type: "server-response",
+			result: {
+				ok: true,
+				value: { absolutePath: "/work/repo/report.md", bytes: 5, offset: 0, data: null, eof: true },
+			},
+			attachments: [{ path: ["data"], codec: "bytes", part: "bytes-0" }],
+		});
+		return {
+			ok: true,
+			status: 200,
+			headers: { get: () => "multipart/form-data; boundary=x" },
+			formData: async () => new Map([
+				["metadata", metadata],
+				["bytes-0", new Blob(["hello"])],
+			]),
+		};
+	};
+	// The menu's save path clicks a temporary anchor; the fake DOM has none.
+	const saved = [];
+	run.sandbox.URL.createObjectURL = (blob) => {
+		saved.push(blob);
+		return "blob:fake";
+	};
+	run.sandbox.URL.revokeObjectURL = () => {};
+
+	await run.tools.downloadPresentedFile({
+		sessionId: "session-1",
+		path: "/work/repo/report.md",
+		name: "report.md",
+	});
+	assert.equal(calls.length, 1, "download did not stop at eof");
+	assert.equal(calls[0].url, "/api/workspaceFiles/readBytes");
+	assert.equal(calls[0].body.method, "workspaceFiles/readBytes");
+	assert.equal(calls[0].body.payload.args.workspaceFileScopeId, "session-1");
+	assert.equal(calls[0].body.payload.args.path, "/work/repo/report.md");
+	assert.deepEqual(calls[0].body.payload.args.options, { range: { offset: 0, length: 262144 } });
+	assert.equal(saved.length, 1, "download did not hand a blob to the browser");
+	assert.equal(await saved[0].text(), "hello", "the assembled blob lost the file bytes");
+	run.runTimers(60000);
+});
+
 test("#43 the root path is a keyboard menu trigger only in mobile mode and restores its attributes", () => {
 	const run = boot();
 	run.reset();
@@ -1632,6 +1750,12 @@ test("every new string exists in both copy packs", () => {
 		"files.menu.copyPath",
 		"files.menu.copyName",
 		"files.copied",
+		"presented.menu",
+		"presented.download",
+		"presented.share",
+		"presented.preview",
+		"presented.downloadStarted",
+		"presented.downloadFailed",
 	];
 	for (const key of keys) {
 		assert.equal(typeof COPY.en[key], "string", `${key} is missing from en`);

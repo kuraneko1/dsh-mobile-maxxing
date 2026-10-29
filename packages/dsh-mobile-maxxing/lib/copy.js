@@ -322,6 +322,12 @@ export const COPY = {
 		"files.menu.copyPath": "Copy path",
 		"files.menu.copyName": "Copy name",
 		"files.copied": "Copied",
+		"presented.menu": "Presented file",
+		"presented.download": "Download",
+		"presented.share": "Share",
+		"presented.preview": "Preview",
+		"presented.downloadStarted": "Download started",
+		"presented.downloadFailed": "Could not download this file",
 
 		// --- service worker --------------------------------------------------
 		"sw.documentTitle": "Offline — DSH",
@@ -641,6 +647,12 @@ export const COPY = {
 		"files.menu.copyPath": "パスをコピー",
 		"files.menu.copyName": "名前をコピー",
 		"files.copied": "コピーしました",
+		"presented.menu": "成果物ファイル",
+		"presented.download": "ダウンロード",
+		"presented.share": "共有",
+		"presented.preview": "プレビュー",
+		"presented.downloadStarted": "ダウンロードを開始しました",
+		"presented.downloadFailed": "ダウンロードできませんでした",
 
 		// --- service worker --------------------------------------------------
 		"sw.documentTitle": "オフライン — DSH",
