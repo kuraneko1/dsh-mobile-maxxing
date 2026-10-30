@@ -3,7 +3,7 @@
 DeepSeek Harness（DSH）の Web UI を、スマートフォンとタブレットで快適に使うためのプラグイン群です。
 PWA、モバイルレイアウト、通知、Markdown 表、日本語 UI を、必要なものだけ導入できます。
 
-**[最新リリース v1.0.0](https://github.com/kuraneko1/dsh-mobile-maxxing/releases/tag/v1.0.0)** · **[リリースノート](RELEASE-NOTES-v1.0.0.md)** · **[English](README.en.md)**
+**[最新リリース v1.0.0](https://github.com/kuraneko1/dsh-mobile-maxxing/releases/tag/v1.0.0)** · **[リリースノート](RELEASE-NOTES-v1.0.0.md)** · **[English](README.en.md)** · **[简体中文](README.zh-CN.md)**
 
 - モバイル本体は素の DSH にそのまま導入でき、通知用の外部ライブラリも不要です。
 - 画面幅ではなく端末を判定するため、狭い PC ウィンドウやタッチ対応 Windows PC をモバイル扱いしません。
