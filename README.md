@@ -23,7 +23,7 @@ CJK の自動リンク修正は、PC の描画を変えない方針のため、�
 
 ## 動作条件
 
-- 検証対象の DSH: **0.2.1-rc.2 / 0.2.1-rc.3**
+- 検証対象の DSH: **0.2.1-rc.2 / 0.2.1-rc.3 / 0.2.2-alpha.2**
 - ブラウザ: 現行の Chrome / Edge / Safari。iOS・iPadOS を含みます
 - PWA と Web Push: **HTTPS または localhost** で DSH へアクセスしていること
 - OS 通知: ブラウザと OS の両方で通知が許可されていること
@@ -148,7 +148,8 @@ v1.0.0 では、通知の信頼性と安全性も強化しています。
 
 - 65名前空間・2915キーを翻訳し、英語フォールバックは0です
 - モバイル本体には含めず、独立した `dsh-locale-ja` だけが日本語を所有します
-- DSH 0.2.1-rc.2 / rc.3 の peer 依存に対応しています
+- DSH 0.2.1-rc.2 / rc.3 / 0.2.2-alpha.2 の peer 依存に対応しています
+- DSH 0.2.2-alpha.2 は本体に日本語を同梱しています。`dsh-locale-ja` は `ja` が登録済みなら何も登録せず、DSH 標準の日本語訳がそのまま使われます
 - 不完全なカタログは `pack-all` が `REFUSED` と表示し、配布しません
 
 詳しくは [`packages/dsh-locale-ja/README.md`](packages/dsh-locale-ja/README.md) を参照してください。

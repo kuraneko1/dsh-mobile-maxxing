@@ -123,11 +123,13 @@ service-worker offline page and the notification text follow the same value
 browser half, the service worker, the manifest and notifications all English;
 untranslated dictionary keys fall back to English.
 
-This package does not add a `ja` language pack. The picker lists only the `en` /
-`zh` locales the host registers, and a stored `ja` choice is ignored while no owner
-registers it (nothing is guessed). Japanese requires the optional separate
-`dsh-locale-ja` package, installed from its local tarball. It is not part of the
-mobile tarball and is never enabled automatically. Both packages may be enabled
+This package does not add a `ja` language pack. The picker lists only the locales
+the host registers (`en` / `zh` on DSH 0.2.1-rc.2 / rc.3), and a stored `ja` choice
+is ignored while no owner registers it (nothing is guessed). DSH 0.2.2-alpha.2 ships
+`ja` itself and needs no extra package. On 0.2.1-rc.2 / rc.3, Japanese requires the
+optional separate `dsh-locale-ja` package, installed from its local tarball. It is
+not part of the mobile tarball and is never enabled automatically; on 0.2.2-alpha.2
+it registers nothing. Both packages may be enabled
 together without a duplicate registration (the mobile half never calls
 `addLanguage`), and the shared display language is never rewritten: only this
 device's view is projected. See
