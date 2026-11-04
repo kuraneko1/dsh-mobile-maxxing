@@ -7361,6 +7361,44 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       document.documentElement.toggleAttribute("data-rdsh-has-dock", hasDock);
     }
 
+    /**
+     * The phone's 44px tap targets (#135).
+     *
+     * Upstream draws the chrome's icon buttons at 24-28px and every class name
+     * carries a build hash ("hHd-Xa_iconButton", "_addTab_<hash>_<n>"), so a
+     * stylesheet cannot name them. A button between 24 and 32px inside the
+     * header, the drawer or the right panel is tagged while the mobile surface
+     * is active; the phone sheet turns the tag into a 44x44 overlay that takes
+     * no layout space. A desktop never tags anything.
+     *
+     * A re-render that replaces the button loses the tag, so every pass claims
+     * the buttons again; the tag leaves with its element.
+     */
+    const TAP_TARGET_ROOTS = "[data-rdsh-header], [data-sidebar-right-panel], [data-rdsh-sidebar]";
+    const TAP_TARGET_CANDIDATES = `${TAP_TARGET_ROOTS} button, [data-sidebar-right-expand]`;
+    /** Menus, dialogs and session rows keep their own geometry. */
+    const TAP_TARGET_EXCLUDE = '[role="menu"], [role="dialog"], [data-shortcut-modal], [data-row-key^="session:"]';
+
+    function decorateTapTargets() {
+      if (!phone()) {
+        for (const tagged of document.querySelectorAll("[data-rdsh-hit44]")) tagged.removeAttribute("data-rdsh-hit44");
+        return;
+      }
+      for (const button of document.querySelectorAll(TAP_TARGET_CANDIDATES)) {
+        if (button.hasAttribute("data-rdsh-hit44")) continue;
+        if (button.closest(TAP_TARGET_EXCLUDE) !== null) continue;
+        // An icon button: labelled for assistive tech, or nothing but its icon.
+        const labelled = String(button.getAttribute("aria-label") || "").trim() !== "";
+        const iconOnly = String(button.textContent || "").trim() === "";
+        if (!labelled && !iconOnly) continue;
+        const rect = button.getBoundingClientRect();
+        // 24-32px: the chrome's icon buttons. A smaller control (a tab's 20px
+        // close affordance) would have its overlay swallow the tab it sits on.
+        if (!(rect.width >= 24 && rect.height >= 24 && rect.width <= 32 && rect.height <= 32)) continue;
+        button.setAttribute("data-rdsh-hit44", "");
+      }
+    }
+
     function markScrollers() {
       if (!phone()) {
         clearOwnedAttribute("data-rdsh-scroll");
@@ -7474,6 +7512,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // #134: written outside the frame branch, because a route that replaces
       // the frame is exactly when the marker went stale.
       syncDrawerMarker(root);
+      // #131: the chat's own session is what a reload restores; the composer
+      // slot is not always mounted, so this pass is the reliable writer.
+      if (onPhone) syncLastSession();
       const header = document.querySelector("header[data-window-drag]");
       if (header !== null) {
         if (onPhone) header.setAttribute("data-rdsh-header", "");
@@ -7502,6 +7543,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       decorateTodoPanel();
       decorateGoalBar();
       decorateHeaderTitle();
+      decorateTapTargets();
       decorateSessionTitleTyping();
       decorateToasts();
       decorateModelSearch();
@@ -9856,6 +9898,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const dialog = document.createElement("dialog");
       dialog.className = "rdsh-mux-exit";
       dialog.setAttribute("aria-labelledby", "rdsh-mux-exit-title");
+      // Focusable itself, so the dialog - not the safe choice - owns the
+      // initial focus: a programmatic focus on Cancel matched :focus-visible
+      // and painted its ring before the user touched anything (#133).
+      dialog.setAttribute("tabindex", "-1");
       const title = document.createElement("h2");
       title.id = "rdsh-mux-exit-title";
       title.textContent = t("mux.back.confirm");
@@ -9886,7 +9932,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           exitTimer = 0;
           if (exitDialog !== dialog || window.closed) return;
           message.textContent = t("mux.back.manualClose");
-          cancel.focus();
+          dialog.focus();
         }, 300);
       });
       actions.append(cancel, yes);
@@ -9894,7 +9940,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       document.body.append(dialog);
       exitDialog = dialog;
       dialog.showModal();
-      cancel.focus();
+      // Tab from here reaches Cancel, then Yes; a keyboard move paints the ring
+      // through :focus-visible only.
+      dialog.focus();
     }
 
     function mobileBack() {
@@ -12995,6 +13043,24 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
     }
 
+    /** The session last written to this device, to keep the decorator quiet. */
+    let markedSession = "";
+
+    /**
+     * Store the session the chat is showing (#131).
+     *
+     * The composer slot is not always mounted (the drawer path never mounts it),
+     * so the value is read from the DOM the same way the back gesture reads it,
+     * and written only when it changes: the decorator runs on every mutation.
+     */
+    function syncLastSession() {
+      if (!phone()) return;
+      const shown = shownSessionId();
+      if (shown === markedSession) return;
+      markedSession = shown;
+      rememberLastSession(shown);
+    }
+
     /**
      * The session to restore when the URL carries none (#131).
      *
@@ -13540,8 +13606,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       useEffect(() => {
         allowFocusElement = null;
         currentSessionId = typeof sessionId === "string" && sessionId !== "" ? sessionId : null;
-        // #131: the session the user is looking at is what a reload restores.
-        rememberLastSession(currentSessionId);
         return () => {
           if (currentSessionId === sessionId) currentSessionId = null;
         };
@@ -13734,19 +13798,21 @@ html[data-rdsh-device-mode="mobile"] [data-rdsh-notice-icon] { width: 18px; heig
   outline: 2px solid var(--dsw-alias-link, #4d6bfe); outline-offset: 2px;
 }
 .rdsh-mux-exit button:disabled { opacity: .5; }
-/* #135: upstream draws these header buttons at 28px (36px from its desktop
-   breakpoint); WCAG 2.2 asks for a 44px target. The transparent overlay only
-   extends the hit area: it is absolutely positioned, so nothing moves and the
-   drawn size stays the same. Mobile sheet only - a desktop keeps 28px. */
-[data-rdsh-header] button[class*="_iconButton"],
-[data-rdsh-header] [data-sidebar-right-expand],
-[data-rdsh-sidebar] button[class*="_iconButton"] { position: relative; }
-[data-rdsh-header] button[class*="_iconButton"]::after,
-[data-rdsh-header] [data-sidebar-right-expand]::after,
-[data-rdsh-sidebar] button[class*="_iconButton"]::after {
+/* #135: upstream draws its chrome icon buttons at 20-28px and every class
+   name carries a build hash ("hHd-Xa_iconButton", "_addTab_<hash>_<n>"), so no
+   stylesheet can name them. decorateTapTargets() tags the small icon-only ones
+   instead; this overlay extends only the hit area - it is absolutely
+   positioned, so nothing moves and the drawn size stays the same. Mobile sheet
+   only: a desktop is never tagged. */
+[data-rdsh-hit44] { position: relative; }
+[data-rdsh-hit44]::after {
   content: ""; position: absolute; inset: 0; margin: auto;
   width: 44px; height: 44px;
 }
+/* The dialog itself takes the initial focus, so its buttons start without a
+   ring; a keyboard Tab still paints one through :focus-visible. */
+.rdsh-mux-exit:focus,
+.rdsh-mux-exit:focus-visible { outline: none; }
 /* Controls the hide list matched. The attribute these selectors key off is
    written only while phone() holds (see applyHideList), and the rules sit in
    the mobile sheet as well: a desktop keeps every control. */

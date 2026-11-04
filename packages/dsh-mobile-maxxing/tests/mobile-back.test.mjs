@@ -132,7 +132,10 @@ test("Android Back returns session to Home, then confirms and cancels without le
   assert.equal(h.dialog().children[0].textContent, "終了しますか？");
   const cancel = h.dialog().children[2].children[0];
   assert.equal(cancel.textContent, "キャンセル");
-  assert.ok(cancel.focused, "the safe choice gets initial focus");
+  // #133: the dialog owns the initial focus, so no button starts ringed; Tab
+  // reaches Cancel first, and only that keyboard move paints :focus-visible.
+  assert.ok(h.dialog().focused, "the dialog takes the initial focus");
+  assert.ok(!cancel.focused, "the safe choice is not focused programmatically");
   cancel.click();
   assert.equal(h.dialog(), null);
   assert.equal(h.state.closes, 0);

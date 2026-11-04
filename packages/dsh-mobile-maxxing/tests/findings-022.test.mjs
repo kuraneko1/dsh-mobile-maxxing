@@ -394,15 +394,15 @@ test("#133 the exit sheet is bottom-anchored with a keyboard-only focus ring", (
 	assert.match(block, /env\(safe-area-inset-bottom/, "the home-indicator strip is padded");
 	assert.match(phone, /\.rdsh-mux-exit button:focus \{ outline: none; \}/, "the always-on ring is removed");
 	assert.match(phone, /\.rdsh-mux-exit button:focus-visible \{/, "the ring is painted for keyboard users");
+	assert.match(phone, /\.rdsh-mux-exit:focus,/, "the focused dialog paints no ring either");
 	assert.ok(!phone.includes("margin-block"), "no inline vertical margin workaround");
 });
 
-test("#135 the header icon buttons get a 44px hit area without moving", () => {
+test("#135 the phone sheet turns the tag into a 44px hit area", () => {
 	const phone = cssTemplate("CSS_PHONE");
-	assert.match(phone, /\[data-rdsh-header\] button\[class\*="_iconButton"\]::after/, "the header icon buttons are extended");
-	assert.match(phone, /\[data-rdsh-header\] \[data-sidebar-right-expand\]::after/, "the right panel's expand control is extended");
-	assert.match(phone, /width: 44px; height: 44px;/, "the target is 44x44");
-	assert.match(phone, /position: absolute; inset: 0; margin: auto;/, "the overlay takes no layout space");
+	assert.match(phone, /\[data-rdsh-hit44\] \{ position: relative; \}/, "the tagged button anchors the overlay");
+	assert.match(phone, /\[data-rdsh-hit44\]::after \{[\s\S]*?width: 44px; height: 44px;/, "the overlay is 44x44");
+	assert.match(phone, /\[data-rdsh-hit44\]::after \{[\s\S]*?position: absolute;/, "the overlay takes no layout space");
 });
 
 test("#133/#135 a desktop sheet carries neither rule", () => {
@@ -411,6 +411,217 @@ test("#133/#135 a desktop sheet carries neither rule", () => {
 	for (const css of [device, shell]) {
 		assert.ok(!css.includes("rdsh-mux-exit button:focus-visible"), "the focus rule is phone-only");
 		assert.ok(!css.includes("44px; height: 44px"), "the tap target is phone-only");
+		assert.ok(!css.includes("data-rdsh-hit44"), "a desktop sheet never draws the overlay");
 		assert.ok(!css.includes("inset: auto 0 0 0"), "the bottom sheet is phone-only");
 	}
 });
+
+// --------------------------------------------------------------------------
+// #131 (second pass): the decorate pass is the writer
+// --------------------------------------------------------------------------
+
+const DECORATE_SESSION_START = "    /** The session last written to this device";
+const DECORATE_SESSION_END = "    /**\n     * The session to restore when the URL carries none";
+
+function decorateSessionHarness({ phone = true, shown = "" } = {}) {
+	const memory = new Map();
+	const probe = { shown, writes: 0 };
+	const sandbox = {
+		phone: () => phone,
+		shownSessionId: () => probe.shown,
+		localStorage: {
+			getItem: (key) => (memory.has(key) ? memory.get(key) : null),
+			setItem: (key, value) => {
+				probe.writes += 1;
+				memory.set(key, String(value));
+			},
+			removeItem: (key) => memory.delete(key),
+		},
+	};
+	vm.createContext(sandbox);
+	const at = CLIENT.indexOf(DECORATE_SESSION_START);
+	const end = CLIENT.indexOf(DECORATE_SESSION_END, at);
+	assert.ok(at > 0 && end > at, "the decorate pass's session writer exists");
+	vm.runInContext([
+		"const LAST_SESSION_KEY = \"" + LAST_KEY + "\";",
+		functionSource("rememberLastSession"),
+		CLIENT.slice(at, end),
+		"globalThis.api = { sync: () => syncLastSession() };",
+	].join("\n"), sandbox);
+	return { ...sandbox.api, probe, memory };
+}
+
+test("#131 the decorate pass stores the session the chat shows", () => {
+	const harness = decorateSessionHarness();
+	harness.sync();
+	assert.equal(harness.memory.has(LAST_KEY), false, "Home writes nothing");
+	harness.probe.shown = "session-1";
+	harness.sync();
+	assert.equal(harness.memory.get(LAST_KEY), "session-1", "opening a session stores it");
+	assert.equal(harness.probe.writes, 1);
+	harness.sync();
+	assert.equal(harness.probe.writes, 1, "an unchanged pass does not rewrite");
+	harness.probe.shown = "session-2";
+	harness.sync();
+	assert.equal(harness.memory.get(LAST_KEY), "session-2");
+});
+
+test("#131 open, store, reload: the next boot shows the same session", () => {
+	const live = decorateSessionHarness();
+	live.probe.shown = "session-1";
+	live.sync();
+	const reload = sessionHarness({ stored: live.memory.get(LAST_KEY), catalog: { "session-1": {} } });
+	assert.equal(reload.api.wanted(), "session-1");
+	assert.deepEqual([...new Set(reload.state.opened)], ["session-1"], "the reload opened it again");
+});
+
+test("#131 a desktop decorate pass writes nothing", () => {
+	const harness = decorateSessionHarness({ phone: false, shown: "session-1" });
+	harness.sync();
+	assert.equal(harness.probe.writes, 0);
+	assert.equal(harness.memory.has(LAST_KEY), false);
+});
+
+// --------------------------------------------------------------------------
+// #133 (second pass): the dialog owns the initial focus
+// --------------------------------------------------------------------------
+
+function exitDialogHarness({ lang = "ja" } = {}) {
+	const state = { activeElement: null, dialog: null };
+	const node = (tag) => {
+		const attributes = new Map();
+		const element = {
+			tagName: tag,
+			children: [],
+			focused: false,
+			open: false,
+			disabled: false,
+			append(...kids) {
+				element.children.push(...kids);
+			},
+			setAttribute(name, value) {
+				attributes.set(name, String(value));
+			},
+			getAttribute: (name) => (attributes.has(name) ? attributes.get(name) : null),
+			addEventListener() {},
+			remove() {},
+			focus() {
+				element.focused = true;
+				state.activeElement = element;
+			},
+			showModal() {
+				element.open = true;
+			},
+		};
+		return element;
+	};
+	const doc = {
+		get activeElement() {
+			return state.activeElement;
+		},
+		createElement: (tag) => node(tag),
+		body: {
+			append(element) {
+				state.dialog = element;
+			},
+		},
+	};
+	const sandbox = {
+		document: doc,
+		t: (key) => (COPY[lang] !== undefined && COPY[lang][key] !== undefined ? COPY[lang][key] : COPY.en[key] ?? key),
+		window: { setTimeout: () => 0, close() {}, closed: false },
+		clearTimeout: () => {},
+	};
+	vm.createContext(sandbox);
+	vm.runInContext([
+		"let exitDialog = null;",
+		"let exitTimer = 0;",
+		functionSource("closeExitDialog"),
+		functionSource("confirmMobileExit"),
+		"globalThis.api = { confirmMobileExit, dialog: () => exitDialog };",
+	].join("\n"), sandbox);
+	return { ...sandbox.api, state };
+}
+
+test("#133 the dialog takes the initial focus and no button starts ringed", () => {
+	const harness = exitDialogHarness();
+	harness.confirmMobileExit();
+	const dialog = harness.dialog();
+	assert.ok(dialog !== null, "the dialog was built");
+	assert.equal(dialog.open, true, "it was shown as a modal");
+	assert.equal(dialog.getAttribute("tabindex"), "-1", "the dialog is focusable itself");
+	assert.equal(harness.state.activeElement, dialog, "document.activeElement is the dialog");
+	assert.equal(dialog.children[2].children[0].focused, false, "Cancel is not focused programmatically");
+});
+
+// --------------------------------------------------------------------------
+// #135 (second pass): the decorate pass tags the hit targets
+// --------------------------------------------------------------------------
+
+const TAP_BLOCK_START = "    /**\n     * The phone's 44px tap targets";
+const TAP_BLOCK_END = "    function markScrollers()";
+
+function tapTargetHarness({ phone = true } = {}) {
+	const buttons = [];
+	const make = ({ text = "", label = "新しいタブ", width = 28, height = 28, menu = false, row = false } = {}) => {
+		const attributes = new Set();
+		const button = {
+			textContent: text,
+			hasAttribute: (name) => attributes.has(name),
+			getAttribute: (name) => (name === "aria-label" ? label : null),
+			setAttribute: (name) => attributes.add(name),
+			removeAttribute: (name) => attributes.delete(name),
+			closest: (selector) => {
+				if (menu && selector.includes("role=\"menu\"")) return {};
+				if (row && selector.includes("data-row-key")) return {};
+				return null;
+			},
+			getBoundingClientRect: () => ({ width, height }),
+			tagged: () => attributes.has("data-rdsh-hit44"),
+		};
+		buttons.push(button);
+		return button;
+	};
+	const sandbox = {
+		phone: () => phone,
+		document: {
+			querySelectorAll: (selector) => (selector.includes("data-rdsh-hit44") ? buttons.filter((button) => button.tagged()) : buttons),
+		},
+	};
+	vm.createContext(sandbox);
+	const at = CLIENT.indexOf(TAP_BLOCK_START);
+	const end = CLIENT.indexOf(TAP_BLOCK_END, at);
+	assert.ok(at > 0 && end > at, "the tap-target decorator exists");
+	vm.runInContext([
+		CLIENT.slice(at, end),
+		"globalThis.api = { decorateTapTargets };",
+	].join("\n"), sandbox);
+	return { decorate: sandbox.api.decorateTapTargets, buttons, make };
+}
+
+test("#135 small icon-only chrome buttons are tagged, the rest are not", () => {
+	const harness = tapTargetHarness();
+	const icon = harness.make({ width: 28, height: 28 });
+	const addTab = harness.make({ width: 28, height: 28 });
+	const withText = harness.make({ text: "New", label: null, width: 28, height: 28 });
+	const inMenu = harness.make({ width: 28, height: 28, menu: true });
+	const inRow = harness.make({ width: 24, height: 24, row: true });
+	const tiny = harness.make({ width: 20, height: 20 });
+	const big = harness.make({ width: 48, height: 44 });
+	harness.decorate();
+	assert.deepEqual(harness.buttons.filter((button) => button.tagged()), [icon, addTab]);
+	assert.equal(withText.tagged(), false, "an unlabelled text button keeps its own box");
+	assert.equal(inMenu.tagged(), false, "a menu keeps its geometry");
+	assert.equal(inRow.tagged(), false, "a session row keeps its geometry");
+	assert.equal(tiny.tagged(), false, "a 20px tab close must not swallow its tab");
+	assert.equal(big.tagged(), false, "a button that is already 44px needs nothing");
+});
+
+test("#135 a desktop pass never tags and clears a stale tag", () => {
+	const harness = tapTargetHarness({ phone: false });
+	const button = harness.make({ width: 28, height: 28 });
+	button.setAttribute("data-rdsh-hit44");
+	harness.decorate();
+	assert.equal(button.tagged(), false, "a desktop carries neither the tag nor its overlay");
+});
+
