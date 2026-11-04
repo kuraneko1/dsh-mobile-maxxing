@@ -1,6 +1,6 @@
 # dsh-mobile-maxxing
 
-> [日本語の README はこちら](README.md)
+> [日本語の README はこちら](README.md) · [简体中文](README.zh-CN.md)
 
 
 Make the DeepSeek Harness Web UI useful on phones and tablets without changing the stock desktop experience.
