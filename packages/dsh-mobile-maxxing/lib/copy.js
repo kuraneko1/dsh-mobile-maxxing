@@ -169,6 +169,7 @@ export const COPY = {
 		"mux.back.manualClose": "This browser cannot close the app automatically. Close this tab or use your device's app switcher.",
 		"mux.back.unavailable": "Cannot return to Home yet. Wait for the app to finish loading and try again.",
 		"mux.toast.noFileInput": "No file input is available for attachments",
+		"mux.toast.noSession": "Open a session first",
 		"mux.detail.todo": "Todo",
 		"mux.detail.goal": "Goal",
 		"mux.section.title": "Mobile UI",
@@ -493,6 +494,7 @@ export const COPY = {
 		"mux.back.manualClose": "この環境では自動で終了できません。ブラウザーのタブを閉じるか、端末のアプリ切り替え画面から閉じてください。",
 		"mux.back.unavailable": "まだホームへ戻れません。画面の読み込みが終わってから、もう一度操作してください。",
 		"mux.toast.noFileInput": "添付できるファイル入力がありません",
+		"mux.toast.noSession": "セッションを開いてから操作してください",
 		"mux.detail.todo": "Todo",
 		"mux.detail.goal": "Goal",
 		"mux.section.title": "モバイルUI",
@@ -745,6 +747,9 @@ export const PROBES = {
 	/** The right panel's toggle, in both states. */
 	rightPanelOpen: ["Open right sidebar", "打开右侧边栏", "右サイドバーを開く"],
 	rightPanelCollapse: ["Collapse right sidebar", "收起右侧边栏", "右サイドバーを折りたたむ"],
+	/** The right panel's dock "add tab" control (#132). A dock action needs a
+	 *  mounted session surface, so the phone answers the tap itself. */
+	newRightTab: ["New tab", "新标签页", "新しいタブ"],
 };
 
 /** Keys the service worker needs, picked out of {@link COPY}. */

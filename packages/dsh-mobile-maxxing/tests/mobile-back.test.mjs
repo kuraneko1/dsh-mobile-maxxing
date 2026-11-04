@@ -384,3 +384,26 @@ test("sessions without a Workspace still return to Home", () => {
   assert.equal(h.state.session, "");
   assert.equal(h.state.cleared, 1);
 });
+
+
+test("the exit confirmation is a bottom sheet with a keyboard-only focus ring (#133)", () => {
+  // The dialog is the screen a phone user meets at Home, so its layout is part
+  // of this flow. The rule lives in the mobile sheet, which is the only sheet
+  // that carries it: a desktop keeps the stock centred dialog.
+  const phoneAt = source.indexOf("const CSS_PHONE = " + String.fromCharCode(96));
+  const phoneEnd = source.indexOf(String.fromCharCode(96) + ";\n", phoneAt);
+  assert.ok(phoneAt > 0 && phoneEnd > phoneAt, "the phone sheet exists");
+  const phone = source.slice(phoneAt, phoneEnd);
+  const at = phone.indexOf(".rdsh-mux-exit {");
+  assert.ok(at > 0, "the exit rule is in the phone sheet");
+  const block = phone.slice(at, phone.indexOf(".rdsh-mux-exit::backdrop"));
+  assert.match(block, /inset: auto 0 0 0/, "the sheet is anchored to the bottom edge");
+  assert.match(block, /max-height: calc\(100svh/, "the sheet's height is capped");
+  assert.match(block, /overflow-y: auto/, "a tall message scrolls inside the sheet");
+  assert.match(block, /env\(safe-area-inset-bottom/, "the home-indicator strip is padded");
+  assert.match(phone, /\.rdsh-mux-exit button:focus-visible \{/, "the ring is keyboard-only");
+  assert.match(phone, /\.rdsh-mux-exit button:focus \{ outline: none; \}/, "focus alone paints no ring");
+  assert.ok(!source.slice(source.indexOf("const CSS_DEVICE"), phoneAt).includes("rdsh-mux-exit"),
+    "the desktop half of the sheet carries no exit rule");
+});
+
