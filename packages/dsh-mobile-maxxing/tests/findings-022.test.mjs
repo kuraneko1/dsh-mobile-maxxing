@@ -174,11 +174,17 @@ test("#131 a URL session still wins over the stored one", () => {
 	assert.deepEqual([...new Set(harness.state.opened)], ["session-2"]);
 });
 
-test("#131 a stored id the catalog no longer knows falls back quietly", () => {
-	const harness = sessionHarness({ stored: "gone", catalog: {} });
+test("#131 an id the loaded catalog does not know falls back quietly", () => {
+	const harness = sessionHarness({ stored: "gone", catalog: { "session-other": {} } });
 	assert.doesNotThrow(() => harness.api.wanted());
 	assert.deepEqual(harness.state.opened, [], "nothing was opened");
 	assert.equal(harness.api.wanted(), "", "the stale request is dropped");
+});
+
+test("#131 an empty catalog keeps the restore pending until it loads", () => {
+	const harness = sessionHarness({ stored: "session-1", catalog: {} });
+	assert.equal(harness.api.wanted(), "session-1", "the request survives an unloaded catalog");
+	assert.deepEqual(harness.state.opened, [], "nothing is opened before the catalog arrives");
 });
 
 test("#131 a desktop boot restores nothing", () => {

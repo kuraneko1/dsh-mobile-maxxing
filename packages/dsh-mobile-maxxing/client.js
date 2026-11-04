@@ -7374,7 +7374,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * A re-render that replaces the button loses the tag, so every pass claims
      * the buttons again; the tag leaves with its element.
      */
-    const TAP_TARGET_ROOTS = "[data-rdsh-header], [data-sidebar-right-panel], [data-rdsh-sidebar]";
+    const TAP_TARGET_ROOTS = "[data-rdsh-header], [data-sidebar-right-panel], [data-rdsh-sidebar], header, [class*='_tabStrip']";
     const TAP_TARGET_CANDIDATES = `${TAP_TARGET_ROOTS} button, [data-sidebar-right-expand]`;
     /** Menus, dialogs and session rows keep their own geometry. */
     const TAP_TARGET_EXCLUDE = '[role="menu"], [role="dialog"], [data-shortcut-modal], [data-row-key^="session:"]';
@@ -13100,12 +13100,25 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const sessions = typeof scope.get === "function" ? scope.get("sessions") : undefined;
       // A session the catalog does not know cannot be opened; when there is no
       // catalog, trying is still safe because retain() rejects unknown ids.
-      const known = (id) => {
-        if (sessions === undefined) return true;
+      /**
+       * What the catalog says about an id (#131).
+       *
+       * A reload mounts this plugin before the session catalog has loaded, so
+       * "absent from an empty catalog" must stay pending instead of dropping
+       * the boot restore; only an id missing from a loaded catalog is gone.
+       *
+       * @param {string} id - the session id the phone asked for.
+       * @returns {"known"|"missing"|"loading"} the catalog's answer.
+       */
+      const catalogState = (id) => {
+        if (sessions === undefined) return "known";
         try {
-          return sessions?.list?.getSnapshot()?.byId?.[id] !== undefined;
+          const byId = sessions?.list?.getSnapshot()?.byId;
+          if (byId === undefined) return "loading";
+          if (Object.keys(byId).length === 0) return "loading";
+          return byId[id] !== undefined ? "known" : "missing";
         } catch {
-          return true;
+          return "known";
         }
       };
       /**
@@ -13119,8 +13132,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (selectingSession) return;
         if (wantedSession === "") return;
         const id = wantedSession;
-        if (!known(id)) {
+        const state = catalogState(id);
+        if (state === "missing") {
           wantedSession = "";
+          return;
+        }
+        if (state === "loading") {
+          // Still loading: keep the request alive; the timer below retries.
           return;
         }
         selectingSession = true;
