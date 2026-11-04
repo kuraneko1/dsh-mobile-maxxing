@@ -99,7 +99,7 @@ install it separately from that local file:
 
 ```sh
 node scripts/pack-all.mjs            # dist/dsh-locale-ja-<version>.tgz only when complete
-dsh plugin --profile web add ./dist/dsh-locale-ja-0.1.1.tgz
+dsh plugin --profile web add ./dist/dsh-locale-ja-0.1.2.tgz
 # restart DSH to load the client half
 ```
 
