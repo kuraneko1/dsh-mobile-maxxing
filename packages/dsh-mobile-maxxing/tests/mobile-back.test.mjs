@@ -410,3 +410,20 @@ test("the exit confirmation is a bottom sheet with a keyboard-only focus ring (#
     "the desktop half of the sheet carries no exit rule");
 });
 
+
+
+test("only the presented-file card gives up text selection (#138)", () => {
+  // The card owns a long press: the system's selection and the iOS callout
+  // ("Copy", "Look Up") must not fight it. Everything else in the transcript
+  // keeps the stock selection, so the rule is scoped to the card and its
+  // children, and lives in the phone sheet only.
+  const phoneAt = source.indexOf("const CSS_PHONE = " + String.fromCharCode(96));
+  const phoneEnd = source.indexOf(String.fromCharCode(96) + ";\n", phoneAt);
+  assert.ok(phoneAt > 0 && phoneEnd > phoneAt, "the phone sheet exists");
+  const phone = source.slice(phoneAt, phoneEnd);
+  assert.match(phone, /\[data-presented-file\],\n  \[data-presented-file\] \* \{/, "the card and its children are exempt");
+  assert.match(phone, /\[data-presented-file\] \*\s*\{[^}]*user-select: none !important/, "children cannot be selected");
+  assert.match(phone, /-webkit-touch-callout: none !important/, "the iOS callout is suppressed");
+  const desktop = source.slice(source.indexOf("const CSS_DEVICE"), phoneAt);
+  assert.ok(!desktop.includes("data-presented-file"), "a desktop keeps the stock selection");
+});

@@ -15159,6 +15159,18 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     -webkit-touch-callout: none !important;
   }
 
+  /* The presented-file card opens its own long-press menu (Download / Share /
+     Preview / Copy path), so the system must not select its text or raise the
+     iOS callout ("Copy", "Look Up") while a finger rests on it. Only the card
+     is exempt: body text, tool output and every other transcript node keep the
+     stock selection behaviour. */
+  [data-presented-file],
+  [data-presented-file] * {
+    -webkit-user-select: none !important;
+    user-select: none !important;
+    -webkit-touch-callout: none !important;
+  }
+
   /* Todo rows / goal objective open a full-text popover on tap. */
   [data-rdsh-todo-item],
   [data-rdsh-goal-objective] { cursor: pointer; }
