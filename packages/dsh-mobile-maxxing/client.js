@@ -13826,6 +13826,9 @@ html[data-rdsh-device-mode="mobile"] [data-rdsh-notice-icon] { width: 18px; heig
 [data-rdsh-hit44]::after {
   content: ""; position: absolute; inset: 0; margin: auto;
   width: 44px; height: 44px;
+  /* The overlay is the button's own hit area: it must receive the pointer and
+     hand it to its host. */
+  pointer-events: auto;
 }
 /* The dialog itself takes the initial focus, so its buttons start without a
    ring; a keyboard Tab still paints one through :focus-visible. */
