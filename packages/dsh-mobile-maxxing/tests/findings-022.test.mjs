@@ -631,3 +631,53 @@ test("#135 a desktop pass never tags and clears a stale tag", () => {
 	assert.equal(button.tagged(), false, "a desktop carries neither the tag nor its overlay");
 });
 
+
+
+// --------------------------------------------------------------------------
+// --------------------------------------------------------------------------
+// #138 follow-up: share keeps a way out when the bytes cannot be read
+// --------------------------------------------------------------------------
+
+const DOWNLOAD_FN = (() => {
+	const at = CLIENT.indexOf("    async function downloadPresentedFile(");
+	assert.ok(at > 0, "downloadPresentedFile exists");
+	const end = CLIENT.indexOf("\n    }\n", at);
+	assert.ok(end > at, "downloadPresentedFile is complete");
+	return CLIENT.slice(at, end + "\n    }".length);
+})();
+
+function shareHarness({ blob, share, canShare = () => true }) {
+	const state = { downloads: 0, saves: 0, toasts: [] };
+	const sandbox = {
+		presentedFileBlob: blob,
+		presentedCanShareFiles: canShare,
+		presentedDownloadViaEndpoint: () => { state.downloads += 1; },
+		presentedSaveBlob: () => { state.saves += 1; },
+		notify: (message) => state.toasts.push(message),
+		t: (key) => key,
+		navigator: { share },
+		File: class {},
+		console: { warn() {} },
+	};
+	vm.createContext(sandbox);
+	vm.runInContext(DOWNLOAD_FN, sandbox);
+	return { state, run: () => sandbox.downloadPresentedFile({ sessionId: "session-1", path: "/w/a.html", name: "a.html" }, true) };
+}
+
+test("share falls back to the host download when the bytes cannot be read", async () => {
+	const h = shareHarness({ blob: async () => { throw new Error("read failed"); }, share: async () => {} });
+	await h.run();
+	assert.equal(h.state.downloads, 1, "the host download is used instead");
+	assert.equal(h.state.saves, 0, "no blob was saved");
+	assert.deepEqual(h.state.toasts, ["presented.shareFailed"], "the fallback says what happened");
+});
+
+test("a dismissed share sheet is not a failure", async () => {
+	const h = shareHarness({
+		blob: async () => ({ type: "text/html" }),
+		share: async () => { const e = new Error("dismissed"); e.name = "AbortError"; throw e; },
+	});
+	await h.run();
+	assert.equal(h.state.downloads, 0, "nothing else happens");
+	assert.deepEqual(h.state.toasts, [], "nothing is reported");
+});

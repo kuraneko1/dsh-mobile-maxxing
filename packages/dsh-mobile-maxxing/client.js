@@ -9456,6 +9456,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const remote = presentedRemote;
       if (remote !== null && remote !== undefined
         && remote.workspaceFiles !== undefined && typeof remote.workspaceFiles.readBytes === "function") {
+        try {
         const result = await remote.workspaceFiles.readBytes(info.sessionId, info.path, {
           range: { offset, length: PRESENTED_CHUNK_BYTES },
         });
@@ -9470,6 +9471,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         else if (Array.isArray(data)) chunk = new Uint8Array(data);
         else if (typeof data === "string") chunk = Uint8Array.from(atob(data), (ch) => ch.charCodeAt(0));
         return { value, chunk };
+        } catch (error) {
+          // The remote transport can refuse a read the plain HTTP route
+          // completes (the iOS PWA's connection, for one). Fall through to
+          // fetch instead of failing the download or share outright.
+          console.warn("[rdsh-mobile-ux] presented read via remote failed", error);
+        }
       }
       if (typeof fetch !== "function") throw new Error("download is unavailable");
       const rpcId = globalThis.crypto?.randomUUID?.()
@@ -9564,7 +9571,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * tap, so the browser's own download handling (and its user-gesture
      * rules) applies instead of a blob created after an async read.
      */
-    function presentedDownloadViaEndpoint(info) {
+    function presentedDownloadViaEndpoint(info, quiet = false) {
       const anchor = document.createElement("a");
       anchor.href = presentedDownloadUrl(info);
       anchor.download = info.name;
@@ -9572,7 +9579,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       document.body.append(anchor);
       anchor.click?.();
       anchor.remove();
-      notify(t("presented.downloadStarted"));
+      if (!quiet) notify(t("presented.downloadStarted"));
     }
 
     async function downloadPresentedFile(info, share = false) {
@@ -9581,26 +9588,45 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         presentedDownloadViaEndpoint(info);
         return;
       }
-      let blob;
+      let blob = null;
       try {
         blob = await presentedFileBlob(info);
-      } catch {
-        notify(t("presented.downloadFailed"));
-        return;
+      } catch (error) {
+        // Share has a second route (the host's own download) and keeps going;
+        // a plain download has none.
+        console.warn("[rdsh-mobile-ux] presented read failed", error);
+        if (!share) {
+          notify(t("presented.downloadFailed"));
+          return;
+        }
       }
       if (share) {
-        try {
-          if (!presentedCanShareFiles(info) || typeof File !== "function") {
-            throw new Error("share is unavailable");
+        if (blob !== null && presentedCanShareFiles(info) && typeof File === "function") {
+          try {
+            await navigator.share({ files: [new File([blob], info.name, { type: blob.type })] });
+            return;
+          } catch (error) {
+            // Closing the share sheet is the user's choice, not a failure.
+            // Anything else (lost user activation on a slow read, an OS
+            // refusal) falls back to the host's download below.
+            if (error?.name === "AbortError") return;
+            console.warn("[rdsh-mobile-ux] presented share failed", error);
           }
-          await navigator.share({ files: [new File([blob], info.name, { type: blob.type })] });
-          return;
-        } catch (error) {
-          // Closing the share sheet is the user's choice, not a failure.
-          // Anything else (lost user activation on a slow read, an OS
-          // refusal) still leaves the user the file, as a download.
-          if (error?.name === "AbortError") return;
         }
+        try {
+          if (info.sessionId !== "") {
+            presentedDownloadViaEndpoint(info, true);
+            notify(t("presented.shareFailed"));
+          } else if (blob !== null) {
+            presentedSaveBlob(blob, info.name);
+            notify(t("presented.downloadStarted"));
+          } else {
+            notify(t("presented.downloadFailed"));
+          }
+        } catch {
+          notify(t("presented.downloadFailed"));
+        }
+        return;
       }
       try {
         if (info.sessionId !== "") presentedDownloadViaEndpoint(info);

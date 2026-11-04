@@ -336,6 +336,7 @@ export const COPY = {
 		"presented.preview": "Preview",
 		"presented.downloadStarted": "Download started",
 		"presented.downloadFailed": "Could not download this file",
+		"presented.shareFailed": "Could not share. Download started",
 
 		// --- service worker --------------------------------------------------
 		"sw.documentTitle": "Offline — DSH",
@@ -669,6 +670,7 @@ export const COPY = {
 		"presented.preview": "プレビュー",
 		"presented.downloadStarted": "ダウンロードを開始しました",
 		"presented.downloadFailed": "ダウンロードできませんでした",
+		"presented.shareFailed": "共有できませんでした。ダウンロードを開始しました",
 
 		// --- service worker --------------------------------------------------
 		"sw.documentTitle": "オフライン — DSH",
