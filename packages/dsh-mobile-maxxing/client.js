@@ -7361,6 +7361,44 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       document.documentElement.toggleAttribute("data-rdsh-has-dock", hasDock);
     }
 
+    /**
+     * The phone's 44px tap targets (#135).
+     *
+     * Upstream draws the chrome's icon buttons at 24-28px and every class name
+     * carries a build hash ("hHd-Xa_iconButton", "_addTab_<hash>_<n>"), so a
+     * stylesheet cannot name them. A button between 24 and 32px inside the
+     * header, the drawer or the right panel is tagged while the mobile surface
+     * is active; the phone sheet turns the tag into a 44x44 overlay that takes
+     * no layout space. A desktop never tags anything.
+     *
+     * A re-render that replaces the button loses the tag, so every pass claims
+     * the buttons again; the tag leaves with its element.
+     */
+    const TAP_TARGET_ROOTS = "[data-rdsh-header], [data-sidebar-right-panel], [data-rdsh-sidebar], header, [class*='_tabStrip']";
+    const TAP_TARGET_CANDIDATES = `${TAP_TARGET_ROOTS} button, [data-sidebar-right-expand]`;
+    /** Menus, dialogs and session rows keep their own geometry. */
+    const TAP_TARGET_EXCLUDE = '[role="menu"], [role="dialog"], [data-shortcut-modal], [data-row-key^="session:"]';
+
+    function decorateTapTargets() {
+      if (!phone()) {
+        for (const tagged of document.querySelectorAll("[data-rdsh-hit44]")) tagged.removeAttribute("data-rdsh-hit44");
+        return;
+      }
+      for (const button of document.querySelectorAll(TAP_TARGET_CANDIDATES)) {
+        if (button.hasAttribute("data-rdsh-hit44")) continue;
+        if (button.closest(TAP_TARGET_EXCLUDE) !== null) continue;
+        // An icon button: labelled for assistive tech, or nothing but its icon.
+        const labelled = String(button.getAttribute("aria-label") || "").trim() !== "";
+        const iconOnly = String(button.textContent || "").trim() === "";
+        if (!labelled && !iconOnly) continue;
+        const rect = button.getBoundingClientRect();
+        // 24-32px: the chrome's icon buttons. A smaller control (a tab's 20px
+        // close affordance) would have its overlay swallow the tab it sits on.
+        if (!(rect.width >= 24 && rect.height >= 24 && rect.width <= 32 && rect.height <= 32)) continue;
+        button.setAttribute("data-rdsh-hit44", "");
+      }
+    }
+
     function markScrollers() {
       if (!phone()) {
         clearOwnedAttribute("data-rdsh-scroll");
@@ -7394,6 +7432,56 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return document.querySelector(ariaLabelSelector("nav", "sessionHierarchy", "Session hierarchy"));
     }
 
+    /**
+     * A full-screen surface that owns the screen instead of the frame (#134).
+     *
+     * Settings renders over the app with `data-shortcut-modal="settings"`; the
+     * drawer it was opened from is not reachable while it shows, and a route
+     * that replaces the frame is the same case (`frame()` returns null).
+     *
+     * @returns {boolean} whether such a surface is on screen.
+     */
+    function fullscreenSurfaceShown() {
+      const settings = document.querySelector('[data-shortcut-modal="settings"]');
+      return settings !== null && routeLaidOut(settings);
+    }
+
+    /** The closed marker `closeDrawer()` records when there is nothing to click. */
+    function markDrawerClosed() {
+      document.documentElement.setAttribute("data-rdsh-drawer", "closed");
+      if (state.drawerOpen) emit({ drawerOpen: false });
+    }
+
+    /**
+     * Write this pass's drawer marker (#134).
+     *
+     * The attribute used to be written only while a frame was mounted, so a
+     * full-screen route left `open` behind it: Escape closed Settings and the
+     * FAB and the backdrop stayed on the open styling. This records the same
+     * closed state `closeDrawer()` records when there is no frame to click,
+     * and keeps it closed until the drawer is asked for again.
+     *
+     * @param {Element|null} root - the app frame, when one is mounted.
+     */
+    function syncDrawerMarker(root) {
+      if (!phone()) return;
+      const route = fullscreenSurfaceShown();
+      if (route) drawerRouteClosed = true;
+      // The frame's own state settles the latch: a drawer that really is
+      // collapsed (or absent) has nothing left to hide.
+      if (root === null || root.hasAttribute("data-sidebar-collapsed")) drawerRouteClosed = false;
+      const open = root !== null && !route && !drawerRouteClosed && !root.hasAttribute("data-sidebar-collapsed");
+      if (!open) {
+        markDrawerClosed();
+        return;
+      }
+      if (!state.drawerOpen) emit({ drawerOpen: true });
+      document.documentElement.setAttribute("data-rdsh-drawer", "open");
+    }
+
+    /** A full-screen route closed the drawer marker; an explicit open ends it. */
+    let drawerRouteClosed = false;
+
     function decorateFast() {
       fitVisualViewport();
       // One mode decision per pass. Every tag below belongs to the mobile
@@ -7415,15 +7503,18 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           }
           const sidebar = document.querySelector('[data-slot="sidebar"]');
           if (sidebar && sidebar.parentElement) sidebar.parentElement.setAttribute("data-rdsh-sidebar", "");
-          const open = !root.hasAttribute("data-sidebar-collapsed");
-          if (open !== state.drawerOpen) emit({ drawerOpen: open });
-          document.documentElement.setAttribute("data-rdsh-drawer", open ? "open" : "closed");
         } else {
           for (const attribute of ["data-rdsh-frame", "data-rdsh-center-col", "data-rdsh-rightbar-col", "data-rdsh-sidebar", "data-rdsh-drawer"]) {
             clearOwnedAttribute(attribute);
           }
         }
       }
+      // #134: written outside the frame branch, because a route that replaces
+      // the frame is exactly when the marker went stale.
+      syncDrawerMarker(root);
+      // #131: the chat's own session is what a reload restores; the composer
+      // slot is not always mounted, so this pass is the reliable writer.
+      if (onPhone) syncLastSession();
       const header = document.querySelector("header[data-window-drag]");
       if (header !== null) {
         if (onPhone) header.setAttribute("data-rdsh-header", "");
@@ -7452,6 +7543,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       decorateTodoPanel();
       decorateGoalBar();
       decorateHeaderTitle();
+      decorateTapTargets();
       decorateSessionTitleTyping();
       decorateToasts();
       decorateModelSearch();
@@ -7610,6 +7702,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function toggleDrawer() {
+      drawerRouteClosed = false;
       // Share the decorator's locator so a localised label still opens the
       // drawer; the stock global label is only the fallback for a route with
       // no sidebar slot.
@@ -7624,8 +7717,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // A full-screen route may not render the app frame at all. Reflect the
         // closed state instead of leaving `data-rdsh-drawer="open"` behind for
         // the next route (the FAB keys off this attribute).
-        document.documentElement.setAttribute("data-rdsh-drawer", "closed");
-        if (state.drawerOpen) emit({ drawerOpen: false });
+        markDrawerClosed();
         scheduleDecorate();
         return;
       }
@@ -7639,8 +7731,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         } else {
           // Route content replaced the sidebar chrome: there is nothing to
           // click, so record the state the next decorate pass should show.
-          document.documentElement.setAttribute("data-rdsh-drawer", "closed");
-          if (state.drawerOpen) emit({ drawerOpen: false });
+          markDrawerClosed();
         }
       }
       scheduleDecorate();
@@ -9807,6 +9898,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const dialog = document.createElement("dialog");
       dialog.className = "rdsh-mux-exit";
       dialog.setAttribute("aria-labelledby", "rdsh-mux-exit-title");
+      // Focusable itself, so the dialog - not the safe choice - owns the
+      // initial focus: a programmatic focus on Cancel matched :focus-visible
+      // and painted its ring before the user touched anything (#133).
+      dialog.setAttribute("tabindex", "-1");
       const title = document.createElement("h2");
       title.id = "rdsh-mux-exit-title";
       title.textContent = t("mux.back.confirm");
@@ -9837,7 +9932,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           exitTimer = 0;
           if (exitDialog !== dialog || window.closed) return;
           message.textContent = t("mux.back.manualClose");
-          cancel.focus();
+          dialog.focus();
         }, 300);
       });
       actions.append(cancel, yes);
@@ -9845,7 +9940,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       document.body.append(dialog);
       exitDialog = dialog;
       dialog.showModal();
-      cancel.focus();
+      // Tab from here reaches Cancel, then Yes; a keyboard move paints the ring
+      // through :focus-visible only.
+      dialog.focus();
     }
 
     function mobileBack() {
@@ -11114,10 +11211,41 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         || probeValues("navAutomation", ["Automation tasks"]).includes(label);
     }
 
+    /**
+     * Right-panel controls that need a mounted session surface (#132).
+     *
+     * `sidebarRight` throws "no session surface is mounted" when the dock's
+     * actions are asked for with no session on screen: the expand control and
+     * the dock's own "new tab" stay tappable, so on Home the tap is answered
+     * here with the guidance the Host's palette gives for the same state.
+     *
+     * @param {Event} event - the click being captured.
+     * @param {Element} target - the click's target.
+     * @returns {boolean} whether the tap was consumed.
+     */
+    function consumeNoSessionPanelTap(event, target) {
+      if (!phone() || shownSessionId() !== "") return false;
+      const button = target.closest("button[aria-label]");
+      if (button === null) return false;
+      const label = button.getAttribute("aria-label") || "";
+      const expand = probeValues("rightPanelOpen", ["Open right sidebar"]);
+      const addTab = probeValues("newRightTab", ["New tab"]);
+      if (!expand.includes(label) && !addTab.includes(label)) return false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      mobileToast(t("mux.toast.noSession"));
+      return true;
+    }
+
     function onClickCapture(event) {
       const target = event.target;
       if (target === null || target.closest === undefined) return;
+      // #132: answer a right-panel control that has no session to act on,
+      // before upstream's handler can throw for the missing surface.
+      if (consumeNoSessionPanelTap(event, target)) return;
       if (target.closest("[data-rdsh-sidebar-toggle]") !== null) {
+        // The user is opening the drawer by hand: a route's closed marker ends.
+        drawerRouteClosed = false;
         rememberDrawerScroll();
         restoreDrawerScroll();
       }
@@ -12864,6 +12992,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /** How long a selected session is re-asserted after a notification tap. */
     const SESSION_CONFIRM_MS = 15000;
+    /**
+     * The session this device last showed (#131).
+     *
+     * The shell keeps no session in the URL, so a reload - including the offline
+     * one served from the service worker - starts on the workspace picker with
+     * no composer. The id lives in this browser only and is restored only when
+     * the URL carries none.
+     */
+    const LAST_SESSION_KEY = "dsh-mobile-maxxing:last-session";
     /** Set while this module is opening a session, to stop re-entrancy. */
     let selectingSession = false;
     /** The session a notification asked for, until the DOM shows it. */
@@ -12889,6 +13026,60 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       sessionOpener?.();
     }
 
+    /**
+     * Remember the session this device is showing (#131).
+     *
+     * A desktop keeps the upstream UI untried and untouched: it neither writes
+     * the key nor reads it back, so "last session" stays a phone affordance.
+     *
+     * @param {string|null} sessionId - the session now on screen, or null.
+     */
+    function rememberLastSession(sessionId) {
+      if (!phone()) return;
+      try {
+        if (typeof sessionId === "string" && sessionId !== "") localStorage.setItem(LAST_SESSION_KEY, sessionId);
+      } catch {
+        /* private mode: the restore below simply finds nothing */
+      }
+    }
+
+    /** The session last written to this device, to keep the decorator quiet. */
+    let markedSession = "";
+
+    /**
+     * Store the session the chat is showing (#131).
+     *
+     * The composer slot is not always mounted (the drawer path never mounts it),
+     * so the value is read from the DOM the same way the back gesture reads it,
+     * and written only when it changes: the decorator runs on every mutation.
+     */
+    function syncLastSession() {
+      if (!phone()) return;
+      const shown = shownSessionId();
+      if (shown === markedSession) return;
+      markedSession = shown;
+      rememberLastSession(shown);
+    }
+
+    /**
+     * The session to restore when the URL carries none (#131).
+     *
+     * Offline is not a reason to skip the restore: the service worker can boot
+     * this page and the local shell can still open a session it already knows.
+     * An id that no longer opens is dropped by `attachSessionOpener`'s catalog
+     * check, which leaves the stock workspace picker in place.
+     *
+     * @returns {string} a session id, or "" when there is nothing to restore.
+     */
+    function lastSessionFromStorage() {
+      if (!phone()) return "";
+      try {
+        return localStorage.getItem(LAST_SESSION_KEY) ?? "";
+      } catch {
+        return "";
+      }
+    }
+
     /** The session the chat is currently showing, read from the DOM. */
     function shownSessionId() {
       try {
@@ -12909,12 +13100,25 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const sessions = typeof scope.get === "function" ? scope.get("sessions") : undefined;
       // A session the catalog does not know cannot be opened; when there is no
       // catalog, trying is still safe because retain() rejects unknown ids.
-      const known = (id) => {
-        if (sessions === undefined) return true;
+      /**
+       * What the catalog says about an id (#131).
+       *
+       * A reload mounts this plugin before the session catalog has loaded, so
+       * "absent from an empty catalog" must stay pending instead of dropping
+       * the boot restore; only an id missing from a loaded catalog is gone.
+       *
+       * @param {string} id - the session id the phone asked for.
+       * @returns {"known"|"missing"|"loading"} the catalog's answer.
+       */
+      const catalogState = (id) => {
+        if (sessions === undefined) return "known";
         try {
-          return sessions?.list?.getSnapshot()?.byId?.[id] !== undefined;
+          const byId = sessions?.list?.getSnapshot()?.byId;
+          if (byId === undefined) return "loading";
+          if (Object.keys(byId).length === 0) return "loading";
+          return byId[id] !== undefined ? "known" : "missing";
         } catch {
-          return true;
+          return "known";
         }
       };
       /**
@@ -12928,8 +13132,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (selectingSession) return;
         if (wantedSession === "") return;
         const id = wantedSession;
-        if (!known(id)) {
+        const state = catalogState(id);
+        if (state === "missing") {
           wantedSession = "";
+          return;
+        }
+        if (state === "loading") {
+          // Still loading: keep the request alive; the timer below retries.
           return;
         }
         selectingSession = true;
@@ -13575,10 +13784,22 @@ html[data-rdsh-device-mode="mobile"] body > [role="alert"]:has([data-rdsh-notice
 html[data-rdsh-device-mode="mobile"] body > [role="alert"]:has([data-rdsh-notice-icon]) > span:last-child { display: flex; flex: 1 1 auto; align-items: center; min-width: 0; }
 html[data-rdsh-device-mode="mobile"] body > [role="alert"]:has([data-rdsh-notice-icon]) button { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; align-self: center; min-height: 44px; min-width: 56px; margin-left: auto; padding: 6px 12px; border: 1px solid currentColor; border-radius: 9px; font: inherit; font-weight: 600; text-decoration: none; }
 html[data-rdsh-device-mode="mobile"] [data-rdsh-notice-icon] { width: 18px; height: 18px; }
+/* #133: the exit confirmation is a bottom sheet on a phone. It is anchored to
+   the bottom edge (so it never floats over the composer and the welcome
+   heading in the middle of the screen), the safe-area strip is part of its
+   padding, and its own height is bounded with an internal scroll. The dialog
+   focuses Cancel itself, so a plain :focus ring would always be visible: the
+   ring is painted for keyboard users only. */
 .rdsh-mux-exit {
-  box-sizing: border-box; width: min(360px, calc(100vw - 32px));
-  border: 1px solid var(--dsw-alias-border-l3, #888); border-radius: 16px;
-  padding: 24px; color: var(--dsw-alias-label-primary, #222);
+  box-sizing: border-box;
+  inset: auto 0 0 0; height: auto;
+  margin: 0 auto; /* bottom-anchored; never the UA's vertical centring */
+  width: min(480px, 100vw); max-width: 100vw;
+  max-height: calc(100svh - 96px);
+  overflow-y: auto; overscroll-behavior: contain;
+  padding: 20px 20px calc(20px + max(env(safe-area-inset-bottom, 0px), var(--rdsh-safe-bottom, 0px)));
+  border: 1px solid var(--dsw-alias-border-l3, #888); border-radius: 16px 16px 0 0;
+  color: var(--dsw-alias-label-primary, #222);
   background: var(--dsw-alias-background-primary, Canvas); font: inherit;
 }
 .rdsh-mux-exit::backdrop { background: rgba(0,0,0,.45); }
@@ -13590,7 +13811,29 @@ html[data-rdsh-device-mode="mobile"] [data-rdsh-notice-icon] { width: 18px; heig
   min-height: 44px; padding: 8px 16px; border: 1px solid currentColor;
   border-radius: 8px; color: inherit; background: transparent; font: inherit;
 }
+.rdsh-mux-exit button:focus { outline: none; }
+.rdsh-mux-exit button:focus-visible {
+  outline: 2px solid var(--dsw-alias-link, #4d6bfe); outline-offset: 2px;
+}
 .rdsh-mux-exit button:disabled { opacity: .5; }
+/* #135: upstream draws its chrome icon buttons at 20-28px and every class
+   name carries a build hash ("hHd-Xa_iconButton", "_addTab_<hash>_<n>"), so no
+   stylesheet can name them. decorateTapTargets() tags the small icon-only ones
+   instead; this overlay extends only the hit area - it is absolutely
+   positioned, so nothing moves and the drawn size stays the same. Mobile sheet
+   only: a desktop is never tagged. */
+[data-rdsh-hit44] { position: relative; }
+[data-rdsh-hit44]::after {
+  content: ""; position: absolute; inset: 0; margin: auto;
+  width: 44px; height: 44px;
+  /* The overlay is the button's own hit area: it must receive the pointer and
+     hand it to its host. */
+  pointer-events: auto;
+}
+/* The dialog itself takes the initial focus, so its buttons start without a
+   ring; a keyboard Tab still paints one through :focus-visible. */
+.rdsh-mux-exit:focus,
+.rdsh-mux-exit:focus-visible { outline: none; }
 /* Controls the hide list matched. The attribute these selectors key off is
    written only while phone() holds (see applyHideList), and the rules sit in
    the mobile sheet as well: a desktop keeps every control. */
@@ -15356,7 +15599,10 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         // screen, and reports a tap the same way. `?session=` covers the cold
         // start, where no worker message can arrive before the page renders.
         navigator.serviceWorker?.addEventListener("message", onWorkerMessage);
-        const bootSession = sessionFromUrl();
+        // #131: the URL carries a session only when a notification tap put one
+        // there. Otherwise this device's last session is restored, offline
+        // included; an id that no longer opens falls back to the picker.
+        const bootSession = sessionFromUrl() || lastSessionFromStorage();
         if (bootSession !== "") requestSession(bootSession);
         const disposeMobileBack = installMobileBack();
         document.addEventListener("touchstart", onTouchStart, { capture: true, passive: true });
