@@ -185,3 +185,48 @@ test("a closing drawer keeps its page, a desktop has no paging at all", () => {
 	assert.equal(hidden(desktop), 0, "a desktop keeps every session row");
 });
 
+
+// ---------------------------------------------------------------------------
+// #142: the keyboard pin leaves the drawer alone
+// ---------------------------------------------------------------------------
+
+const FIT_START = "    function fitVisualViewport() {";
+const FIT_END = "    function measureSafeArea()";
+
+function pinHarness({ drawer = "open", dialog = null } = {}) {
+	const html = {
+		attributes: new Set(),
+		getAttribute(name) { return name === "data-rdsh-drawer" ? drawer : null; },
+		hasAttribute(name) { return this.attributes.has(name); },
+		toggleAttribute(name, on) { if (on) this.attributes.add(name); else this.attributes.delete(name); },
+		style: { values: new Map(), setProperty(name, value) { this.values.set(name, value); } },
+	};
+	const sandbox = {
+		document: { documentElement: html, querySelector: (selector) => (selector === '[role="dialog"]' ? dialog : null) },
+		window: { innerWidth: 390, innerHeight: 844, visualViewport: { height: 500, offsetTop: 0, scale: 1 } },
+		phone: () => true,
+		keyboardOpen: () => true,
+	};
+	vm.runInNewContext(slice(FIT_START, FIT_END) + "\nthis.fit = fitVisualViewport;", sandbox);
+	return { html, sandbox, fit: () => sandbox.fit() };
+}
+
+test("the open drawer keeps the full-height layout while the keyboard is up", () => {
+	const h = pinHarness();
+	h.fit();
+	assert.equal(h.html.hasAttribute("data-rdsh-keyboard"), false, "no keyboard pin while the drawer is open");
+});
+
+test("the chat screen still pins itself to the keyboard", () => {
+	const h = pinHarness({ drawer: "closed" });
+	h.fit();
+	assert.equal(h.html.hasAttribute("data-rdsh-keyboard"), true);
+	assert.equal(h.html.style.values.get("--rdsh-vv-height"), "500px");
+});
+
+test("a dialog keeps owning its own geometry", () => {
+	const h = pinHarness({ drawer: "closed", dialog: {} });
+	h.fit();
+	assert.equal(h.html.hasAttribute("data-rdsh-keyboard"), false);
+});
+

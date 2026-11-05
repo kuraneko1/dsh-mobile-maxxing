@@ -3285,7 +3285,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // Dialogs and landscape composers own their scroll and focus geometry;
       // pinning them to the keyboard-shrunk viewport hides the input itself.
       const landscape = window.innerWidth > window.innerHeight;
-      const open = phone() && !landscape && viewport !== null && viewport !== undefined && document.querySelector('[role="dialog"]') === null && keyboardOpen();
+      // #142: the drawer is a full-height overlay inside body. Pinning body to
+      // the keyboard band clips it, so opening the session search made the
+      // drawer slide out of sight. The drawer scrolls and focuses on its own;
+      // the composer pin belongs to the chat screen only.
+      const drawer = root.getAttribute("data-rdsh-drawer") === "open";
+      const open = phone() && !landscape && !drawer && viewport !== null && viewport !== undefined && document.querySelector('[role="dialog"]') === null && keyboardOpen();
       root.toggleAttribute("data-rdsh-keyboard", open);
       if (!open) return;
       root.style.setProperty("--rdsh-vv-top", `${Math.max(0, Math.round(viewport.offsetTop))}px`);
