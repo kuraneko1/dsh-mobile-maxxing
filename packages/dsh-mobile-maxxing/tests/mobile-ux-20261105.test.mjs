@@ -198,6 +198,8 @@ function pinHarness({ drawer = "open", dialog = null } = {}) {
 		attributes: new Set(),
 		getAttribute(name) { return name === "data-rdsh-drawer" ? drawer : null; },
 		hasAttribute(name) { return this.attributes.has(name); },
+		setAttribute(name, value) { this.attributes.add(name); this.lastSet = [name, value]; },
+		removeAttribute(name) { this.attributes.delete(name); },
 		toggleAttribute(name, on) { if (on) this.attributes.add(name); else this.attributes.delete(name); },
 		style: { values: new Map(), setProperty(name, value) { this.values.set(name, value); } },
 	};
