@@ -3347,6 +3347,34 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
     }
 
+    let safeAreaFrame = 0;
+    let safeAreaKey = "";
+
+    /**
+     * One safe-area measurement per frame, and none when nothing moved.
+     *
+     * A visual viewport fires resize *and* scroll for every keyboard frame, and
+     * each measurement appends a probe and reads its computed padding: a full
+     * style recalculation (about 7ms). The insets only change when the geometry
+     * does, so the key below is enough to skip the rest.
+     */
+    function scheduleMeasureSafeArea(force = false) {
+      // The keyboard moves the visual viewport but not the glass: while it is
+      // up the insets cannot change, so the probe is not needed at all.
+      if (!force && keyboardOpen()) return;
+      const viewport = window.visualViewport;
+      const key = [
+        window.innerWidth, window.innerHeight,
+        viewport === null || viewport === undefined ? "" : Math.round(viewport.height),
+        viewport === null || viewport === undefined ? "" : Math.round(viewport.offsetTop),
+        viewport === null || viewport === undefined ? "" : viewport.scale,
+        window.navigator.standalone === true,
+      ].join("|");
+      if (!force && key === safeAreaKey) return;
+      safeAreaKey = key;
+      measureSafeArea();
+    }
+
     function measureSafeArea() {
       if (!phone()) {
         releaseSafeArea();
@@ -7753,18 +7781,32 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      */
     let live = false;
     let scheduled = false;
+    /** Minimum gap between decorate passes; streaming used to run 30-60/s. */
+    const DECORATE_MIN_MS = 120;
+    let lastDecorateAt = 0;
+
     function scheduleDecorate() {
       if (!live || scheduled) return;
       scheduled = true;
-      requestAnimationFrame(() => {
-        if (!live) return;
+      // The flag clears before the pass runs, so a pass that bails out (a
+      // disposed install) can never wedge the scheduler for good.
+      const run = () => {
         scheduled = false;
+        if (!live) return;
+        lastDecorateAt = Date.now();
         try {
           decorate();
         } catch (error) {
           console.error("[rdsh-mobile-ux] decorate failed", error);
         }
-      });
+      };
+      // Only a streaming turn builds a mutation storm (30-60 passes a second);
+      // idle and one-off updates keep the frame they always had.
+      const running = globalThis.__RDSH_MOBILE_UX_RUNNING__;
+      const storm = running instanceof Set && running.size > 0;
+      const wait = storm ? Math.max(0, DECORATE_MIN_MS - (Date.now() - lastDecorateAt)) : 0;
+      if (wait === 0) requestAnimationFrame(run);
+      else setTimeout(() => requestAnimationFrame(run), wait);
     }
 
     // ---------------------------------------------------------------------
@@ -10878,6 +10920,18 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /** How far from the left edge the OS Back gesture is claimed. */
     const EDGE_SUPPRESS_PX = 28;
 
+    /** Whether a right-panel layer is what the finger actually landed on. */
+    function panelOwnsPoint(x, y) {
+      try {
+        const under = typeof document.elementFromPoint === "function" ? document.elementFromPoint(x, y) : null;
+        if (!(under instanceof Element) || typeof under.closest !== "function") return false;
+        return under.closest(RIGHT_PANEL_ROOT) !== null
+          || under.closest("[data-sidebar-right-open], [data-rdsh-rightpanel]") !== null;
+      } catch {
+        return false;
+      }
+    }
+
     function onEdgeSwipeStart(event) {
       edgeSwipe = null;
       if (!phone() || event.touches.length !== 1) return;
@@ -10894,7 +10948,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const target = event.target;
       const fromRight = touch.clientX >= window.innerWidth - 36;
       const drawerOpen = document.documentElement.getAttribute("data-rdsh-drawer") === "open";
-      const panelOpen = document.documentElement.hasAttribute("data-rdsh-rightpanel-open");
+      // Read the panel state from the app's own marker as well: the tagged
+      // attribute lands with the next decorate pass, and a swipe in that gap
+      // used to open the drawer on top of a panel the user was looking at.
+      // The point under the finger is the last fallback: whatever the tags say,
+      // a panel layer that covers the left edge owns that edge.
+      const panelOpen = document.documentElement.hasAttribute("data-rdsh-rightpanel-open")
+        || document.querySelector("[data-sidebar-right-open]") !== null
+        || panelOwnsPoint(touch.clientX, touch.clientY);
       // While the preview is open, a rightward swipe anywhere on it goes back
       // to the chat, the way a pushed iOS screen does. This is checked before
       // the edge rules below, and it owns the left edge too: opening the
@@ -10909,18 +10970,22 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // #113: a fullscreen panel owns the whole screen, including the left
         // edge; a rightward swipe from there closes it. Only a docked panel
         // (landscape) leaves the left edge to the drawer (#59).
-        const isDocked = (() => {
-          const dock = rightPanelNode === null ? null : rightPanelNode.getBoundingClientRect();
-          return dock !== null && dock.width > 0 && dock.width < window.innerWidth * 0.85;
-        })();
-        const inLeftEdge = !fromRight && touch.clientX <= 36 && isDocked;
+        // A docked panel leaves the chat visible beside it, so the left edge
+        // still belongs to the drawer (#59). A sheet that merely happens to be
+        // narrower than the viewport is *not* docked: it starts at the left
+        // edge and owns it (#113). The panel's left offset, not a width ratio,
+        // is what tells the two apart -- a 320px preview on a 390px phone is
+        // narrower than 85% but still covers the whole edge, and the ratio test
+        // used to hand that swipe to the drawer.
+        const dockRect = rightPanelNode === null || rightPanelNode === undefined ? null : rightPanelNode.getBoundingClientRect();
+        const docked = dockRect !== null && dockRect.width > 0 && dockRect.left >= EDGE_SUPPRESS_PX;
+        const inLeftEdge = !fromRight && touch.clientX <= 36 && docked;
         if (!inLeftEdge) {
           // #59: a docked panel (landscape) shares the screen with the
           // conversation. Only a swipe that starts on the panel closes it; a
           // swipe on the chat keeps the chat's own gesture instead of reaching
           // across the split and collapsing the column under the finger.
-          const dock = rightPanelNode === null ? null : rightPanelNode.getBoundingClientRect();
-          if (!(dock !== null && dock.width > 0 && dock.width < window.innerWidth * 0.85 && touch.clientX < dock.left)) {
+          if (!(docked && touch.clientX < dockRect.left)) {
             edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight: false, closesPanel: true };
             return;
           }
@@ -11885,6 +11950,26 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return null;
     }
 
+    /**
+     * The scroll container under one finger, resolved once per gesture (#156).
+     *
+     * The drag handler used to walk the ancestors on every touchmove and read
+     * getComputedStyle plus scrollHeight for each one (11 reads per move in a
+     * measured trace), which forces a layout mid-scroll. The container cannot
+     * change while a finger is down, so the first answer is kept until the
+     * touch ends.
+     */
+    let dragScrollerTarget = null;
+    let dragScroller = null;
+
+    function gestureScroller(target) {
+      if (target !== dragScrollerTarget) {
+        dragScrollerTarget = target;
+        dragScroller = scrollableAncestor(target);
+      }
+      return dragScroller;
+    }
+
     function onTouchStart(event) {
       startTerminalDrag(event);
       if (event.touches.length !== 1) {
@@ -11892,6 +11977,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         return;
       }
       touchStart = { y: event.touches[0].clientY, x: event.touches[0].clientX };
+      dragScrollerTarget = null;
+      dragScroller = null;
     }
 
     function onTouchMove(event) {
@@ -11922,7 +12009,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // the guard below would cancel every vertical drag in the terminal. The
       // bridge above owns those.
       if (target !== null && target.closest !== undefined && target.closest("textarea, input, .xterm")) return;
-      const scroller = scrollableAncestor(target);
+      const scroller = gestureScroller(target);
       if (scroller === null) {
         if (event.cancelable) event.preventDefault();
         return;
@@ -14546,24 +14633,36 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           return undefined;
         }
         let active = true;
+        let lastTps = 0;
         const update = async () => {
           try {
             const response = await fetch(`/api/rdsh-mobile-ux/live-speed?sessionId=${encodeURIComponent(sessionId)}`, { cache: "no-store" });
             if (!response.ok) {
+              lastTps = 0;
               if (active) setSpeed(null);
               return;
             }
             const data = await response.json();
-            if (active) setSpeed(Number.isFinite(data?.tps) && data.tps > 0 ? Math.round(data.tps) : null);
+            lastTps = Number.isFinite(data?.tps) && data.tps > 0 ? data.tps : 0;
+            if (active) setSpeed(lastTps > 0 ? Math.round(lastTps) : null);
           } catch {
+            lastTps = 0;
             if (active) setSpeed(null);
           }
         };
-        void update();
-        const timer = window.setInterval(() => void update(), 500);
+        // Poll at the display cadence only while tokens are actually flowing.
+        // An idle session used to ask every 500ms around the clock (7,200
+        // requests an hour); the speed is unknown until the next turn anyway.
+        let timer = 0;
+        const loop = async () => {
+          await update();
+          if (!active) return;
+          timer = window.setTimeout(loop, lastTps > 0 ? 500 : 5000);
+        };
+        void loop();
         return () => {
           active = false;
-          window.clearInterval(timer);
+          window.clearTimeout(timer);
         };
       }, [sessionId, phone]);
       if (!phone || speed === null) return null;
@@ -16595,11 +16694,12 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           if (!phone()) return;
           // Do not close the attach sheet here: opening it blurs the composer,
           // and the resulting keyboard-close resize would remove it instantly.
-          measureSafeArea();
+          scheduleMeasureSafeArea();
           scheduleDecorate();
           clearTimeout(rotationTimer);
           rotationTimer = window.setTimeout(() => {
-            measureSafeArea();
+            // The insets land a frame or two after a rotation: force this pass.
+            scheduleMeasureSafeArea(true);
             scheduleDecorate();
             scheduleTerminalFit();
           }, 350);
@@ -16676,7 +16776,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             return;
           }
           keyboardRecoveryUntil = 0;
-          measureSafeArea();
+          // A recovery exists because an event was missed: measure even if the
+          // geometry looks unchanged.
+          scheduleMeasureSafeArea(true);
           scheduleDecorate();
           scheduleTerminalFit();
         };
@@ -16750,7 +16852,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           emit({ narrow: narrow() });
           if (!phone()) return;
           resetGestures();
-          measureSafeArea();
+          scheduleMeasureSafeArea();
           scheduleDecorate();
         };
         const onMedia = () => {

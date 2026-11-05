@@ -494,3 +494,31 @@ test("keyboard frames are coalesced into one fit per frame", () => {
 	assert.match(CLIENT, /addEventListener\("scroll", scheduleFitVisualViewport\)/, "scroll too");
 	assert.match(CLIENT, /height === fitHeight\) return;/, "an unchanged band writes nothing");
 });
+
+// --------------------------------------------------------------------------
+// #156: main-thread cost of the mobile surface
+// --------------------------------------------------------------------------
+
+test("decorate is throttled only while a turn streams", () => {
+	assert.match(CLIENT, /const DECORATE_MIN_MS = 120;/, "the floor is declared");
+	assert.match(CLIENT, /const running = globalThis\.__RDSH_MOBILE_UX_RUNNING__;/, "the storm gate reads the running set");
+	assert.match(CLIENT, /const storm = running instanceof Set && running\.size > 0;/, "idle passes keep their frame");
+	assert.match(CLIENT, /scheduled = false;\n        if \(!live\) return;/, "the flag clears before the pass runs");
+});
+
+test("the safe area is not re-measured on keyboard frames", () => {
+	assert.match(CLIENT, /function scheduleMeasureSafeArea\(force = false\)/, "the scheduler exists");
+	assert.match(CLIENT, /if \(!force && keyboardOpen\(\)\) return;/, "the keyboard cannot move the glass");
+	assert.match(CLIENT, /if \(!force && key === safeAreaKey\) return;/, "an unchanged geometry is skipped");
+});
+
+test("a drag resolves its scroll container once", () => {
+	assert.match(CLIENT, /function gestureScroller\(target\)/, "the per-gesture cache exists");
+	assert.match(CLIENT, /const scroller = gestureScroller\(target\);/, "the drag handler uses it");
+	assert.match(CLIENT, /dragScrollerTarget = null;\n      dragScroller = null;/, "a new touch starts a new gesture");
+});
+
+test("an idle session stops asking for the live speed", () => {
+	assert.match(CLIENT, /timer = window\.setTimeout\(loop, lastTps > 0 \? 500 : 5000\);/, "idle polls back off");
+	assert.match(CLIENT, /let lastTps = 0;/, "the last rate is remembered");
+});
