@@ -398,3 +398,35 @@ test("a modal's fields are pinned to 16px on the phone only", () => {
 	const desktop = CLIENT.slice(CLIENT.indexOf("const CSS_DEVICE"), CLIENT.indexOf("const CSS_PHONE"));
 	assert.ok(!desktop.includes('role="dialog"] [role="dialog"]'), "a desktop keeps its own sizes");
 });
+
+// --------------------------------------------------------------------------
+// #147: the terminal key row owns paste
+// --------------------------------------------------------------------------
+
+function pasteHarness(readText) {
+	const at = CLIENT.indexOf("    function pasteTerminalClipboard(");
+	const end = CLIENT.indexOf("\n    }\n", at);
+	assert.ok(at > 0 && end > at, "pasteTerminalClipboard exists");
+	const state = { sent: [] };
+	const sandbox = {
+		navigator: { clipboard: { readText } },
+		sendTerminalBytes: (section, text) => state.sent.push({ section, text }),
+	};
+	vm.createContext(sandbox);
+	vm.runInContext(CLIENT.slice(at, end + "\n    }".length), sandbox);
+	return { state, sandbox };
+}
+
+test("the paste key sends the clipboard into the terminal", async () => {
+	const h = pasteHarness(async () => "echo hi");
+	h.sandbox.pasteTerminalClipboard({ section: "s1" });
+	await new Promise((r) => setTimeout(r, 0));
+	assert.deepEqual(h.state.sent, [{ section: "s1", text: "echo hi" }]);
+});
+
+test("a refused clipboard leaves the paste key a no-op", async () => {
+	const h = pasteHarness(async () => { throw new Error("denied"); });
+	h.sandbox.pasteTerminalClipboard({ section: "s1" });
+	await new Promise((r) => setTimeout(r, 0));
+	assert.deepEqual(h.state.sent, []);
+});

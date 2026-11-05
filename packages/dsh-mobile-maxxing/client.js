@@ -11170,6 +11170,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       { id: "left", textKey: "terminalKeys.left", labelKey: "terminalKeys.arrowLeft" },
       { id: "right", textKey: "terminalKeys.right", labelKey: "terminalKeys.arrowRight" },
       { id: "ctrl", textKey: "terminalKeys.ctrl", labelKey: "terminalKeys.control" },
+      // iOS has no Ctrl+V on the soft keyboard; the row owns the paste.
+      { id: "paste", textKey: "terminalKeys.paste", labelKey: "terminalKeys.paste" },
     ];
 
     /**
@@ -11311,10 +11313,36 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         setSpecialKeyControl(state, !state.control);
         return;
       }
+      if (key === "paste") {
+        // The tap is the user activation the clipboard read needs.
+        pasteTerminalClipboard(state);
+        return;
+      }
       const control = state.control;
       const sequence = terminalKeySequence(key, terminalApplicationCursor(state.section), control);
       sendTerminalBytes(state.section, sequence);
       if (control) setSpecialKeyControl(state, false);
+    }
+
+    /**
+     * Paste the clipboard into the terminal as typed input (#147).
+     *
+     * The terminal's real textarea is visually hidden, and a phone keyboard has
+     * no Ctrl+V, so the special-key row owns the gesture. Bytes go through the
+     * same path the keys use, which is what the terminal's onData subscription
+     * listens to.
+     *
+     * @param {object} state - the mounted key row's state.
+     */
+    function pasteTerminalClipboard(state) {
+      const clipboard = navigator.clipboard;
+      if (clipboard === undefined || clipboard === null || typeof clipboard.readText !== "function") return;
+      clipboard.readText().then((text) => {
+        if (typeof text !== "string" || text === "") return;
+        sendTerminalBytes(state.section, text);
+      }).catch(() => {
+        /* Permission denied: the key stays a no-op rather than pasting nothing. */
+      });
     }
 
     function onSpecialKeyPointerDown(event) {
