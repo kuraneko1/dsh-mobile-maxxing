@@ -12071,6 +12071,27 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       event.stopPropagation();
     }
 
+    /**
+     * A field the open phone drawer owns (#142).
+     *
+     * Upstream's session search expands and focuses its own input from the
+     * search button's click; the focus is programmatic, so the "deliberate
+     * focus only" guard used to blur it one tick later: the keyboard flickered
+     * and every search lost its input. The drawer only exists because the user
+     * opened it, and its rows are what the user is tapping, so a field inside
+     * it is a deliberate target.
+     *
+     * @param {Element|null} field - the focused text field.
+     * @returns {boolean} whether the open drawer contains it.
+     */
+    function drawerOwnedField(field) {
+      if (field === null || field === undefined || typeof field.closest !== "function") return false;
+      const root = document && document.documentElement;
+      if (root === null || root === undefined || typeof root.getAttribute !== "function") return false;
+      if (root.getAttribute("data-rdsh-drawer") !== "open") return false;
+      return field.closest("[data-rdsh-sidebar]") !== null;
+    }
+
     function onFocusInGuard(event) {
       if (!phone()) return;
       const field = textBoxOf(event.target);
@@ -12078,6 +12099,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // Only a field deliberately chosen by pointer or Tab may keep focus.
       // App/session opening and programmatic refocusing do not open a keyboard.
       if (field === allowFocusElement) return;
+      if (drawerOwnedField(field)) return;
       // Deferred: Safari/the app re-focuses synchronously from its onFocus
       // handler, so an immediate blur() recurses until the stack overflows.
       setTimeout(() => {
