@@ -7688,17 +7688,41 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      */
     let live = false;
     let scheduled = false;
+    let bootDecorated = false;
+    let decorating = false;
+
+    /** One decorate pass, guarded against the recursion a pass can cause. */
+    function decorateNow() {
+      if (decorating) return;
+      decorating = true;
+      try {
+        decorate();
+      } catch (error) {
+        console.error("[rdsh-mobile-ux] decorate failed", error);
+      } finally {
+        decorating = false;
+      }
+    }
+
     function scheduleDecorate() {
-      if (!live || scheduled) return;
+      if (!live) return;
+      // The first pass must land before the first paint (#148). Waiting for
+      // requestAnimationFrame paints one frame of upstream geometry (fixed
+      // pixel floors, the drawer's column) and then snaps to the phone layout
+      // when the hooks appear, which reads as the chat "jumping" open.
+      if (!bootDecorated) {
+        // Before the app's frame exists a pass finds nothing, so the flag is
+        // only spent on the pass that can actually write the phone geometry.
+        if (frame() !== null) bootDecorated = true;
+        decorateNow();
+        return;
+      }
+      if (scheduled) return;
       scheduled = true;
       requestAnimationFrame(() => {
         if (!live) return;
         scheduled = false;
-        try {
-          decorate();
-        } catch (error) {
-          console.error("[rdsh-mobile-ux] decorate failed", error);
-        }
+        decorateNow();
       });
     }
 
@@ -15408,11 +15432,15 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      (680px and friends), so on a 390px phone the transcript is wider than the
      column and gets clipped. Size it from the column instead. These custom
      properties are the app's own knobs for exactly that. */
+  [data-slot="conversation"],
+  [data-slot="main.conversation"],
   [data-rdsh-conversation] {
     --dsh-chat-user-width: 100% !important;
     --dsh-chat-content-width: 100% !important;
     --dsh-composer-card-max-width: 100% !important;
   }
+  [data-slot="conversation"] > *,
+  [data-slot="main.conversation"] > *,
   [data-rdsh-conversation] > * {
     width: 100% !important;
     min-width: 0 !important;

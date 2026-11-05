@@ -430,3 +430,39 @@ test("a refused clipboard leaves the paste key a no-op", async () => {
 	await new Promise((r) => setTimeout(r, 0));
 	assert.deepEqual(h.state.sent, []);
 });
+
+// --------------------------------------------------------------------------
+// #148: the first decorate pass lands before the first paint
+// --------------------------------------------------------------------------
+
+test("the first decorate pass runs without waiting for a frame", () => {
+	const at = CLIENT.indexOf("    let bootDecorated = false;");
+	assert.ok(at > 0, "the boot flag exists");
+	const end = CLIENT.indexOf("    // ----", at);
+	assert.ok(end > at, "the block is intact");
+	const state = { decorated: 0, frames: 0 };
+	const sandbox = {
+		live: true,
+		scheduled: false,
+		decorate: () => { state.decorated += 1; },
+		requestAnimationFrame: (fn) => { state.frames += 1; fn(); },
+		frame: () => ({}),
+		console: { error() {} },
+	};
+	vm.createContext(sandbox);
+	vm.runInContext(CLIENT.slice(at, end), sandbox);
+	sandbox.scheduleDecorate();
+	assert.equal(state.decorated, 1, "the first pass is synchronous");
+	assert.equal(state.frames, 0, "no frame is spent on the old geometry");
+	sandbox.scheduleDecorate();
+	assert.equal(state.frames, 1, "later passes keep the frame budget");
+});
+
+test("the conversation width is sized from the slot, not only the hook", () => {
+	const tick = String.fromCharCode(96);
+	const at = CLIENT.indexOf("const CSS_PHONE = " + tick);
+	const end = CLIENT.indexOf(tick + ";\\n", at);
+	const phone = CLIENT.slice(at, end);
+	assert.match(phone, /\[data-slot="conversation"\],/, "the upstream slot carries the sizing");
+	assert.match(phone, /\[data-slot="main.conversation"\],/, "the main slot too");
+});
