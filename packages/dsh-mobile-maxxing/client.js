@@ -11565,6 +11565,27 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let terminalFitFrame = 0;
     let terminalFitHeight = 0;
     let terminalFitMount = null;
+    /**
+     * The last measured band ("width x height"), and how many frames it held.
+     *
+     * A keyboard, a URL bar or the panel opening moves the band on every
+     * frame, and every height write makes the app's own `fitScreen` run
+     * (client.terminal.js): it calls `xterm.resize` *and* `model.resize`
+     * unconditionally, and its `proposeDimensions` recomputes cols from
+     * whatever width it sees at that instant. Committing a halfway frame
+     * therefore pushes a cols to the pty that is already stale, xterm reflows
+     * the wrapped lines for it, and the shell's prompt comes back doubled: a
+     * shell repaints its prompt at the cursor's row, and with a prompt that
+     * wrapped, that repaint leaves the same text on the rows above it too.
+     * Waiting for the band to stop moving writes the height once, at the
+     * geometry that actually stays, so a transition costs at most one pty
+     * resize instead of one per frame.
+     */
+    let terminalFitProbe = "";
+    let terminalFitHolds = 0;
+    let terminalFitBurst = 0;
+    /** Frames a still-moving band may hold the fit before it lands anyway. */
+    const TERMINAL_FIT_MAX_HOLDS = 24;
     /** The scrollbar a held fit is waiting on, and the terminal that owns it. */
     let terminalScrollWatch = null;
     let terminalScrollTarget = null;
@@ -11659,6 +11680,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       stopTerminalScrollWatch();
       terminalFitHeight = 0;
       terminalFitMount = null;
+      terminalFitProbe = "";
+      terminalFitHolds = 0;
+      terminalFitBurst = 0;
       for (const mount of document.querySelectorAll("[data-rdsh-terminal-fit]")) {
         mount.style.removeProperty("height");
         mount.style.removeProperty("flex");
@@ -11724,6 +11748,22 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // fit until the slider is back at the end (watchTerminalScroll).
       if (!terminalAtBottom(terminal) && watchTerminalScroll(terminal)) return;
       stopTerminalScrollWatch();
+      // #96: write once, at the geometry that stays. See terminalFitProbe.
+      const probe = `${Math.round(rect.width)}x${height}`;
+      if (probe === terminalFitProbe) {
+        terminalFitHolds += 1;
+      } else {
+        terminalFitProbe = probe;
+        terminalFitHolds = 0;
+        terminalFitBurst += 1;
+      }
+      // A band that keeps moving bursts past this gate; land it anyway so a
+      // viewport that never settles cannot starve the fit.
+      if (terminalFitHolds < 1 && terminalFitBurst < TERMINAL_FIT_MAX_HOLDS) {
+        scheduleTerminalFit();
+        return;
+      }
+      terminalFitBurst = 0;
       if (terminalFitMount !== null && terminalFitMount !== mount) {
         terminalFitMount.style.removeProperty("height");
         terminalFitMount.style.removeProperty("flex");
