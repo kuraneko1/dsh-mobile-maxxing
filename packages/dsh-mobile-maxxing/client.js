@@ -10508,7 +10508,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     const BACK_STATE = "dsh-mobile-maxxing:back";
     let exitDialog = null;
     let exitTimer = 0;
-    let lastBackSwipe = -Infinity;
+    // When this module's own left-edge swipe opened the drawer (#141). iOS
+    // Safari runs its native Back for the same edge gesture before any JS can
+    // cancel it, and that popstate arrives right after the drawer opened. The
+    // user asked for the drawer; the native Back must not close it again.
+    let lastDrawerSwipe = -Infinity;
 
     function iosBackGesture() {
       return /iPad|iPhone|iPod/.test(`${navigator.userAgent || ""} ${navigator.platform || ""}`)
@@ -10675,10 +10679,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const onBack = (event) => {
         if (event.state?.[BACK_STATE] !== "base") return;
         if (!guard()) return;
-        // Safari may report native history navigation for the same edge
-        // gesture. Whichever arrives first owns it; never go back twice.
+        // Safari reports its own native Back for the edge gesture that just
+        // opened the drawer. That popstate is the same gesture, not a second
+        // intent: consume it instead of closing the drawer the user asked for.
         edgeSwipe = null;
-        if (iosBackGesture() && Date.now() - lastBackSwipe < 600) return;
+        if (iosBackGesture() && Date.now() - lastDrawerSwipe < 600) return;
         mobileBack();
       };
       arm();
@@ -10696,24 +10701,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       };
     }
 
-    // Edge swipe from the left opens the session drawer on Android; on iOS
-    // it uses the same Back action as history navigation. From the right it
-    // pulls the preview/right sidebar (the app's own "Open right sidebar").
-    // While the preview is open the left-to-right gesture closes it instead.
+    // Edge swipe from the left opens the session drawer on every platform,
+    // iOS included (#141): the drawer is the only thing the left edge owns.
+    // Back is the Android hardware key (popstate) alone. From the right the
+    // gesture pulls the preview/right sidebar (the app's own "Open right
+    // sidebar"). While the preview is open the left-to-right swipe closes it.
     let edgeSwipe = null;
     function onEdgeSwipeStart(event) {
       edgeSwipe = null;
       if (!phone() || event.touches.length !== 1) return;
       const first = event.touches[0];
-      if (iosBackGesture() && first.clientX <= 36) {
-        lastBackSwipe = -Infinity;
-        if (event.target instanceof Element) {
-          if (event.target.closest('input, textarea, [contenteditable=true], .xterm, [data-dockkit-strip], [data-dockkit-tab]') !== null) return;
-          if (scrolledLeftAncestor(event.target) !== null) return;
-        }
-        edgeSwipe = { x: first.clientX, y: first.clientY, back: true, ready: false };
-        return;
-      }
       if (document.querySelector("[data-rdsh-lightbox], [data-rdsh-crop-overlay], [data-shortcut-modal=settings]") !== null) return;
       const touch = event.touches[0];
       const target = event.target;
@@ -10790,12 +10787,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const touch = event.touches[0];
       const dx = touch.clientX - edgeSwipe.x;
       const dy = touch.clientY - edgeSwipe.y;
-      if (edgeSwipe.back) {
-        if (Math.abs(dy) > 24 || dx < -10) { edgeSwipe = null; return; }
-        if (dx > 4 && event.cancelable) event.preventDefault();
-        edgeSwipe.ready = dx >= 64 && dx > Math.abs(dy) * 2;
-        return;
-      }
       // A vertical finger belongs to the list under it: drop the gesture and
       // let the scroll proceed. Once the movement is clearly horizontal the
       // page must not scroll, or opening the drawer also drags the session
@@ -10839,6 +10830,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (dx < 64) return;
       edgeSwipe = null;
       if (event.cancelable) event.preventDefault();
+      // iOS Safari's native Back for this same edge gesture arrives as the
+      // next popstate; onBack() sees this stamp and lets the drawer stand.
+      lastDrawerSwipe = Date.now();
       toggleDrawer();
     }
     /**
@@ -10863,14 +10857,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clearTimeout(tabReplayTimer);
       cancelLongPress();
     }
-    function onEdgeSwipeEnd(event) {
-      const back = edgeSwipe?.back && edgeSwipe.ready && event?.type !== "touchcancel";
+    function onEdgeSwipeEnd() {
+      // The gesture itself has already run on the move that crossed the
+      // threshold; the end only drops the state (#141 removed the iOS Back
+      // branch, so nothing is deferred to touchend any more).
       edgeSwipe = null;
       endTerminalDrag();
-      if (back) {
-        lastBackSwipe = Date.now();
-        mobileBack();
-      }
     }
 
     // ---------------------------------------------------------------------
