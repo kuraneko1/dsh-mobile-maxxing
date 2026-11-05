@@ -3279,6 +3279,30 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * visual viewport leaves nothing to pan: the composer always sits at the
      * bottom of what is visible and grows upward.
      */
+    /** One pending fit, so a keyboard frame only asks for one style write. */
+    let fitFrame = 0;
+    /** The band the current keyboard marker was written for. */
+    let fitTop = -1;
+    let fitHeight = -1;
+
+    /**
+     * Coalesce the keyboard frames (#151).
+     *
+     * iOS fires resize and scroll for every frame of the keyboard animation.
+     * Running the whole pin on each one writes body height, min-height and the
+     * grid rows per frame, and every write re-lays out the transcript, which is
+     * what made opening the composer feel heavy. One pass per frame, and only
+     * when the band really moved, gives the same picture for a fraction of the
+     * work.
+     */
+    function scheduleFitVisualViewport() {
+      if (fitFrame !== 0) return;
+      fitFrame = requestAnimationFrame(() => {
+        fitFrame = 0;
+        fitVisualViewport();
+      });
+    }
+
     function fitVisualViewport() {
       const root = document.documentElement;
       const viewport = window.visualViewport;
@@ -3291,10 +3315,22 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // the composer pin belongs to the chat screen only.
       const drawer = root.getAttribute("data-rdsh-drawer") === "open";
       const open = phone() && !landscape && !drawer && viewport !== null && viewport !== undefined && document.querySelector('[role="dialog"]') === null && keyboardOpen();
-      root.toggleAttribute("data-rdsh-keyboard", open);
-      if (!open) return;
-      root.style.setProperty("--rdsh-vv-top", `${Math.max(0, Math.round(viewport.offsetTop))}px`);
-      root.style.setProperty("--rdsh-vv-height", `${Math.round(viewport.height)}px`);
+      if (!open) {
+        if (root.hasAttribute("data-rdsh-keyboard")) root.removeAttribute("data-rdsh-keyboard");
+        fitTop = -1;
+        fitHeight = -1;
+        return;
+      }
+      const top = Math.max(0, Math.round(viewport.offsetTop));
+      const height = Math.round(viewport.height);
+      // The animation repeats the same band for a few frames; writing it again
+      // costs another layout and changes nothing.
+      if (root.hasAttribute("data-rdsh-keyboard") && top === fitTop && height === fitHeight) return;
+      fitTop = top;
+      fitHeight = height;
+      root.setAttribute("data-rdsh-keyboard", "");
+      root.style.setProperty("--rdsh-vv-top", `${top}px`);
+      root.style.setProperty("--rdsh-vv-height", `${height}px`);
     }
 
     function measureSafeArea() {
@@ -16655,8 +16691,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         window.addEventListener("orientationchange", onOrientation);
         // The pin has to follow every pan frame, so it is registered ahead of
         // (and does not wait for) the coalesced layout pass below.
-        window.visualViewport?.addEventListener("resize", fitVisualViewport);
-        window.visualViewport?.addEventListener("scroll", fitVisualViewport);
+        window.visualViewport?.addEventListener("resize", scheduleFitVisualViewport);
+        window.visualViewport?.addEventListener("scroll", scheduleFitVisualViewport);
         fitVisualViewport();
         // The visual viewport reports the keyboard and the rotation's own
         // resize; without it an iPhone keyboard can leave the layout sized for
@@ -16813,8 +16849,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             window.removeEventListener("orientationchange", onOrientation);
             window.visualViewport?.removeEventListener("resize", onLayoutResize);
             window.visualViewport?.removeEventListener("scroll", onLayoutResize);
-            window.visualViewport?.removeEventListener("resize", fitVisualViewport);
-            window.visualViewport?.removeEventListener("scroll", fitVisualViewport);
+            window.visualViewport?.removeEventListener("resize", scheduleFitVisualViewport);
+            window.visualViewport?.removeEventListener("scroll", scheduleFitVisualViewport);
             document.documentElement.removeAttribute("data-rdsh-keyboard");
             removeHeightProbe();
             document.removeEventListener("focusout", onKeyboardFocusOut, true);

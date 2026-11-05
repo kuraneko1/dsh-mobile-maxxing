@@ -481,3 +481,14 @@ test("the transcript hook retries while the new session is still unmeasured", ()
 	assert.match(CLIENT, /setTimeout\(\(\) => scheduleDecorate\(\), 80 \* transcriptRetries\)/, "the retry re-runs the pass");
 	assert.match(CLIENT, /lastSlowAt = 0;/, "a session switch frees the slow gate");
 });
+
+// --------------------------------------------------------------------------
+// #151: keyboard frames are coalesced and repeated bands are skipped
+// --------------------------------------------------------------------------
+
+test("keyboard frames are coalesced into one fit per frame", () => {
+	assert.match(CLIENT, /function scheduleFitVisualViewport\(\) \{/, "the coalescer exists");
+	assert.match(CLIENT, /addEventListener\("resize", scheduleFitVisualViewport\)/, "resize goes through it");
+	assert.match(CLIENT, /addEventListener\("scroll", scheduleFitVisualViewport\)/, "scroll too");
+	assert.match(CLIENT, /top === fitTop && height === fitHeight\) return;/, "an unchanged band writes nothing");
+});

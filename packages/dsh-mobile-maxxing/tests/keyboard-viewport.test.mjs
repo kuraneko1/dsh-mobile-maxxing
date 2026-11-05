@@ -22,8 +22,11 @@ function pinFor(viewport, { phone = true, innerHeight = 800, dvh = 800, dialog =
 	const properties = new Map();
 	const root = {
 		toggleAttribute(name, force) { if (force) attributes.set(name, ""); else attributes.delete(name); },
+		hasAttribute(name) { return attributes.has(name); },
+		setAttribute(name, value) { attributes.set(name, value); },
+		removeAttribute(name) { attributes.delete(name); },
 		// The open drawer owns its own scroll and focus geometry (#142).
-		getAttribute(name) { return name === "data-rdsh-drawer" ? drawer : null; },
+		getAttribute(name) { return name === "data-rdsh-drawer" ? drawer : (attributes.get(name) ?? null); },
 		style: { setProperty(name, value) { properties.set(name, value); } },
 	};
 	const probe = { style: {}, isConnected: false, setAttribute() {}, remove() { this.isConnected = false; }, getBoundingClientRect: () => ({ height: dvh }) };
