@@ -445,3 +445,18 @@ test("the conversation width applies before this plugin's hook exists", () => {
 	assert.match(phone, /\[data-slot="main.conversation"\],/, "the main slot too");
 	assert.match(phone, /\[data-slot="conversation"\] > \*/, "its children are sized the same way");
 });
+
+// --------------------------------------------------------------------------
+// #148: the conversation is sized from the upstream slot, not the late hook
+// --------------------------------------------------------------------------
+
+test("the conversation width applies before this plugin's hook exists", () => {
+	const tick = String.fromCharCode(96);
+	const at = CLIENT.indexOf("const CSS_PHONE = " + tick);
+	const end = CLIENT.indexOf(tick + ";\n", at);
+	assert.ok(at > 0 && end > at, "the phone sheet exists");
+	const phone = CLIENT.slice(at, end);
+	assert.match(phone, /\[data-slot="conversation"\],/, "the upstream slot carries the sizing");
+	assert.match(phone, /\[data-slot="main.conversation"\],/, "the main slot too");
+	assert.match(phone, /\[data-slot="conversation"\] > \*/, "its children are sized the same way");
+});

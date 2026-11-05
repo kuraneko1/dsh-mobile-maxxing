@@ -15423,6 +15423,11 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      floors show, which is the "the chat snaps wider once it loads" report. */
   [data-slot="conversation"],
   [data-slot="main.conversation"],
+  /* The upstream slot carries the same sizing from the first paint: waiting
+     for this plugin's hook (decorate) let one frame of upstream's fixed pixel
+     floors show, which is the "the chat snaps wider once it loads" report. */
+  [data-slot="conversation"],
+  [data-slot="main.conversation"],
   [data-rdsh-conversation] {
     --dsh-chat-user-width: 100% !important;
     --dsh-chat-content-width: 100% !important;
