@@ -230,3 +230,117 @@ test("a dialog keeps owning its own geometry", () => {
 	assert.equal(h.html.hasAttribute("data-rdsh-keyboard"), false);
 });
 
+
+// ---------------------------------------------------------------------------
+// #144: a cold start records baselines instead of typing every title
+// ---------------------------------------------------------------------------
+
+const TYPING_START = "    const UNTITLED = probeRegex(";
+const TYPING_END = '    /** Upward travel that counts as "flick the banner away". */';
+
+function typingHarness({ mobile = true } = {}) {
+	let clock = 2_000_000;
+	class Title {
+		constructor() { this.childNodes = [{ nodeType: 3, nodeValue: "" }]; this.attributes = new Set(); }
+		set value(text) { this.childNodes = [{ nodeType: 3, nodeValue: text }]; }
+		hasAttribute(name) { return this.attributes.has(name); }
+		removeAttribute(name) { this.attributes.delete(name); }
+		setAttribute(name, value) { this.attributes.set(name, String(value)); }
+		querySelector() { return null; }
+		append() {}
+		remove() {}
+	}
+	class Row {
+		constructor(id, title) { this.key = "session:" + id; this.title = title; this.attributes = new Set(); }
+		getAttribute(name) { return name === "data-row-key" ? this.key : null; }
+		hasAttribute(name) { return this.attributes.has(name); }
+		setAttribute(name) { this.attributes.add(name); }
+	}
+	const rows = [];
+	const animations = [];
+	const document = {
+		querySelector: () => null,
+		querySelectorAll: (selector) => (selector === "[data-rdsh-session-title]" ? rows.map((row) => row.title) : []),
+		createElement: () => new Title(),
+	};
+	const sandbox = {
+		document, MutationObserver: class { observe() {} disconnect() {} },
+		phone: () => mobile,
+		probeRegex: () => /^(new session|new chat|untitled)$/i,
+		__RDSH_MOBILE_UX_RUNNING__: new Set(),
+		Date: { now: () => clock },
+	};
+	vm.runInNewContext(slice(TYPING_START, TYPING_END) + "\nthis.decorate = decorateSessionTitleTyping; this.setAnimate = (fn) => { animateSessionTitle = fn; };", sandbox);
+	sandbox.setAnimate((element, next, previous) => {
+		animations.push({ next, previous });
+		return { visible: () => next, cancel() {}, reattach() {} };
+	});
+	return {
+		rows, animations, sandbox,
+		add(id, text) {
+			const title = new Title();
+			title.value = text;
+			const row = new Row(id, title);
+			title.closest = () => row;
+			rows.push(row);
+			return { row, title, set: (value) => { title.value = value; } };
+		},
+		decorate: () => sandbox.decorate(),
+	};
+}
+
+test("existing titles on the first pass never type", () => {
+	const h = typingHarness();
+	h.add("a", "Alpha"); h.add("b", "Beta"); h.add("c", "Gamma");
+	h.decorate();
+	assert.equal(h.animations.length, 0, "the boot catalog is a baseline");
+});
+
+test("a cold start that paints empty rows before the titles still never types", () => {
+	const h = typingHarness();
+	const a = h.add("a", ""); const b = h.add("b", "");
+	h.decorate();
+	a.set("Alpha"); b.set("Beta");
+	h.decorate();
+	assert.equal(h.animations.length, 0, "placeholder to title is the baseline");
+});
+
+test("a cold start that paints raw ids before the titles still never types", () => {
+	const h = typingHarness();
+	const a = h.add("a", "a"); const b = h.add("b", "b");
+	h.decorate();
+	a.set("Alpha"); b.set("Beta");
+	h.decorate();
+	assert.equal(h.animations.length, 0, "the id fallback is not a naming event");
+});
+
+test("only a title that changes after the baseline types", () => {
+	const h = typingHarness();
+	const a = h.add("a", "Alpha"); h.add("b", "Beta");
+	h.decorate();
+	a.set("Alpha renamed");
+	h.decorate();
+	assert.deepEqual(h.animations, [{ next: "Alpha renamed", previous: "Alpha" }]);
+});
+
+test("a session being named still types its first title", () => {
+	const h = typingHarness();
+	const a = h.add("a", "New session");
+	// decorateSessionRows() tags the row while its session is in the running
+	// set; that tag is what the typing pass reads.
+	a.row.setAttribute("data-rdsh-running", "");
+	h.decorate();
+	a.set("Generated name");
+	h.decorate();
+	assert.deepEqual(h.animations, [{ next: "Generated name", previous: "New session" }]);
+});
+
+test("a desktop pass animates nothing", () => {
+	const h = typingHarness({ mobile: false });
+	const a = h.add("a", "Alpha");
+	h.decorate();
+	a.set("Alpha renamed");
+	h.decorate();
+	assert.equal(h.animations.length, 0);
+});
+

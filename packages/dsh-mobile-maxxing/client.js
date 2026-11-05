@@ -5339,6 +5339,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     const UNTITLED = probeRegex("untitled", "i", ["new session", "new chat", "untitled"], true);
     /** Last title seen per target, so only the first naming animates. */
     const titleSeen = new Map();
+    /**
+     * Targets whose first real title of this page load is recorded (#144).
+     *
+     * A cold start paints a row with its raw id (or nothing) before the
+     * catalog resolves. That placeholder-to-title transition is a baseline,
+     * not a naming event, so it must not type.
+     */
+    const titleReady = new Set();
     /** How many passes each target has played; a session is named twice. */
     const titlePasses = new Map();
     /** Passes allowed per session: the initial label, then the model's name. */
@@ -5738,27 +5746,42 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         else if (previous === undefined) titleSeen.set(key, "");
         if (text === "") continue;
         // First sight is the baseline: a page reload must not retype history.
-        if (previous === undefined || previous === text) continue;
+        // A real title here also proves the row is named, so a later change to
+        // it is a rename. An id or an untitled label is a placeholder: the real
+        // title that follows is still a baseline (see the branch below).
+        if (previous === undefined) {
+          if (!untitled(text) && text !== id) titleReady.add(key);
+          continue;
+        }
+        if (previous === text) continue;
         const passes = titlePasses.get(key) ?? 0;
         if (passes >= TITLE_PASSES) continue;
-        // An unnamed session shows the working directory or its raw id in the
-        // header, so "untitled" alone misses the case this animation is for.
-        // A name is generated while the session works (or right after), and a
-        // manual rename later does not qualify.
-        const generated = working
-          || untitled(previous)
-          || previous === id
-          || now - (titleWorkingAt.get(key) ?? 0) < NAME_GRACE_MS;
-        // The first pass is the initial label. The second is the name the model
-        // settles on, which arrives on its own schedule, so it is allowed
-        // without the running window and erases the label first.
-        if (passes === 0 && !generated) continue;
+        // #144: the first real title of this page load is a baseline, not a
+        // naming event. A cold PWA start paints a row with its raw id (or
+        // nothing) before the catalog resolves; treating that as "untitled ->
+        // named" typed every existing session at once on the phone.
+        if (!titleReady.has(key)) {
+          titleReady.add(key);
+          const named = working
+            || now - (titleWorkingAt.get(key) ?? 0) < NAME_GRACE_MS
+            // Only a session that was seen working can have been unnamed at
+            // its first sight; a boot row was never in the running set.
+            || (untitled(previous) && titleWorkingAt.has(key));
+          if (!named) continue;
+        }
+        // After the baseline, a change is either the name the model settled on
+        // (the row's first label is replaced) or a rename; both type once.
+        // TITLE_PASSES caps the passes so a stream of re-renders cannot loop.
         titlePasses.set(key, passes + 1);
         // Why the running animation is cancelled rather than awaited: waiting
         // would reveal the new name the moment the layer is removed, and only
         // then start erasing it — a pop followed by a pointless animation.
         const active = titleAnimations.get(key);
-        const eraseFrom = active === undefined ? (passes === 0 ? "" : previous) : active.visible();
+        // Erase whatever is on screen first: a rename clears the old name, and
+        // a session's generated name clears its "New session" label. Only the
+        // very first paint had nothing to erase, and that paint is a baseline
+        // now, so it never reaches this line.
+        const eraseFrom = active === undefined ? previous : active.visible();
         active?.cancel();
         const controller = animateSessionTitle(element, text, eraseFrom);
         if (controller === null) titleAnimations.delete(key);
