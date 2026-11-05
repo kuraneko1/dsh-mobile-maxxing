@@ -9460,23 +9460,29 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      */
     async function presentedReadChunk(info, offset) {
       const remote = presentedRemote;
-      if (remote !== null && remote !== undefined
-        && remote.workspaceFiles !== undefined && typeof remote.workspaceFiles.readBytes === "function") {
+      // The remote service is a lazily-injected cordis proxy: touching a
+      // property before the injection throws ("cannot get property ... without
+      // inject"). Reading it inside the try keeps that refusal a fall-through
+      // to the HTTP route instead of a failed download.
+      if (remote !== null && remote !== undefined) {
         try {
-        const result = await remote.workspaceFiles.readBytes(info.sessionId, info.path, {
-          range: { offset, length: PRESENTED_CHUNK_BYTES },
-        });
-        if (result === null || result === undefined || result.ok !== true) {
-          throw new Error(result?.error?.message ?? "read failed");
-        }
-        const value = result.value ?? {};
-        const data = value.data;
-        let chunk = null;
-        if (data instanceof Uint8Array) chunk = data;
-        else if (data instanceof ArrayBuffer) chunk = new Uint8Array(data);
-        else if (Array.isArray(data)) chunk = new Uint8Array(data);
-        else if (typeof data === "string") chunk = Uint8Array.from(atob(data), (ch) => ch.charCodeAt(0));
-        return { value, chunk };
+          const files = remote.workspaceFiles;
+          if (files !== undefined && typeof files.readBytes === "function") {
+            const result = await files.readBytes(info.sessionId, info.path, {
+              range: { offset, length: PRESENTED_CHUNK_BYTES },
+            });
+            if (result === null || result === undefined || result.ok !== true) {
+              throw new Error(result?.error?.message ?? "read failed");
+            }
+            const value = result.value ?? {};
+            const data = value.data;
+            let chunk = null;
+            if (data instanceof Uint8Array) chunk = data;
+            else if (data instanceof ArrayBuffer) chunk = new Uint8Array(data);
+            else if (Array.isArray(data)) chunk = new Uint8Array(data);
+            else if (typeof data === "string") chunk = Uint8Array.from(atob(data), (ch) => ch.charCodeAt(0));
+            return { value, chunk };
+          }
         } catch (error) {
           // The remote transport can refuse a read the plain HTTP route
           // completes (the iOS PWA's connection, for one). Fall through to
@@ -9508,8 +9514,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       let chunk = null;
       const contentType = response.headers?.get?.("content-type") ?? "";
       if (contentType.includes("multipart/form-data") && typeof response.formData === "function") {
-        // Uint8Array results travel as a metadata part plus one blob part
-        // per bytes value (attachments[0] names the part).
         const form = await response.formData();
         const raw = form.get("metadata");
         meta = typeof raw === "string" ? JSON.parse(raw) : null;
@@ -9521,6 +9525,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         meta = await response.json();
         const data = meta?.result?.value?.data;
         if (typeof data === "string") chunk = Uint8Array.from(atob(data), (ch) => ch.charCodeAt(0));
+        else if (data instanceof Uint8Array) chunk = data;
         else if (Array.isArray(data)) chunk = new Uint8Array(data);
       }
       const result = meta?.result;

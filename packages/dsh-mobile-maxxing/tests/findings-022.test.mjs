@@ -728,3 +728,26 @@ test("share falls back to the shared path when the prefetch is not ready", async
 	assert.equal(h.state.shared, 0, "a cold prefetch does not call the sheet directly");
 	assert.equal(h.state.downloads, 1, "the download path runs instead");
 });
+test("a refused remote read falls back to the HTTP route", async () => {
+	const at = CLIENT.indexOf("    async function presentedReadChunk(");
+	const end = CLIENT.indexOf("\n    }\n", at);
+	assert.ok(at > 0 && end > at, "presentedReadChunk exists");
+	const src = "const PRESENTED_CHUNK_BYTES = 262144;\n"
+		+ "const presentedRemote = new Proxy({}, { get() { throw new Error('cannot get property without inject'); } });\n"
+		+ CLIENT.slice(at, end + "\n    }".length);
+	const sandbox = {
+		fetch: async () => ({
+			ok: true,
+			headers: { get: () => "application/json" },
+			json: async () => ({ result: { ok: true, value: { bytes: 3, eof: true, data: "YWJj" } } }),
+		}),
+		crypto: { randomUUID: () => "probe" },
+		console: { warn() {} },
+		Uint8Array, ArrayBuffer, atob,
+	};
+	vm.createContext(sandbox);
+	vm.runInContext(src, sandbox);
+	const { chunk, value } = await sandbox.presentedReadChunk({ sessionId: "s", path: "/w/a.txt" }, 0);
+	assert.equal(Buffer.from(chunk).toString(), "abc", "the HTTP bytes are used");
+	assert.equal(value.eof, true);
+});
