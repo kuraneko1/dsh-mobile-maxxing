@@ -3279,6 +3279,30 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * visual viewport leaves nothing to pan: the composer always sits at the
      * bottom of what is visible and grows upward.
      */
+    /** One pending fit, so a keyboard frame only asks for one style write. */
+    let fitFrame = 0;
+    /** The band the current keyboard marker was written for. */
+    let fitTop = -1;
+    let fitHeight = -1;
+
+    /**
+     * Coalesce the keyboard frames (#151).
+     *
+     * iOS fires resize and scroll for every frame of the keyboard animation.
+     * Running the whole pin on each one writes body height, min-height and the
+     * grid rows per frame, and every write re-lays out the transcript, which is
+     * what made opening the composer feel heavy. One pass per frame, and only
+     * when the band really moved, gives the same picture for a fraction of the
+     * work.
+     */
+    function scheduleFitVisualViewport() {
+      if (fitFrame !== 0) return;
+      fitFrame = requestAnimationFrame(() => {
+        fitFrame = 0;
+        fitVisualViewport();
+      });
+    }
+
     function fitVisualViewport() {
       const root = document.documentElement;
       const viewport = window.visualViewport;
@@ -3290,11 +3314,37 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // drawer slide out of sight. The drawer scrolls and focuses on its own;
       // the composer pin belongs to the chat screen only.
       const drawer = root.getAttribute("data-rdsh-drawer") === "open";
-      const open = phone() && !landscape && !drawer && viewport !== null && viewport !== undefined && document.querySelector('[role="dialog"]') === null && keyboardOpen();
-      root.toggleAttribute("data-rdsh-keyboard", open);
-      if (!open) return;
-      root.style.setProperty("--rdsh-vv-top", `${Math.max(0, Math.round(viewport.offsetTop))}px`);
-      root.style.setProperty("--rdsh-vv-height", `${Math.round(viewport.height)}px`);
+      // On 0.2.2 the app shell itself is a dialog, so 'any dialog open' would
+      // switch this off everywhere. Only a modal opened *over* the shell owns
+      // its own keyboard geometry (the directory picker, Settings).
+      const modal = document.querySelector('[role="dialog"] [role="dialog"]');
+      const open = phone() && !landscape && !drawer && viewport !== null && viewport !== undefined && modal === null && keyboardOpen();
+      if (!open) {
+        if (root.hasAttribute("data-rdsh-keyboard")) root.removeAttribute("data-rdsh-keyboard");
+        fitTop = -1;
+        fitHeight = -1;
+        return;
+      }
+      const top = Math.max(0, Math.round(viewport.offsetTop));
+      const height = Math.round(viewport.height);
+      // The animation repeats the same band for a few frames; writing it again
+      // costs another layout and changes nothing.
+      if (root.hasAttribute("data-rdsh-keyboard") && top === fitTop && height === fitHeight) return;
+      fitTop = top;
+      fitHeight = height;
+      root.setAttribute("data-rdsh-keyboard", "");
+      root.style.setProperty("--rdsh-vv-top", `${top}px`);
+      root.style.setProperty("--rdsh-vv-height", `${height}px`);
+      // Reserve the room only for a transcript that actually scrolls: a short
+      // conversation sits at the top, and padding it would only push it away
+      // (the "the reply vanished when the keyboard opened" report).
+      const scroller = document.querySelector("[class*=scrollBody]");
+      const transcript = document.querySelector("[data-rdsh-transcript]");
+      if (transcript !== null) {
+        const overflows = scroller !== null && scroller.scrollHeight > scroller.clientHeight + 8;
+        if (overflows) transcript.setAttribute("data-rdsh-kb-room", "");
+        else transcript.removeAttribute("data-rdsh-kb-room");
+      }
     }
 
     function measureSafeArea() {
@@ -7442,6 +7492,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     let lastSlowAt = 0;
+    /** Passes spent waiting for a fresh transcript to be measurable (#150). */
+    let transcriptRetries = 0;
 
     /**
      * The session breadcrumb navigation (#97).
@@ -7628,6 +7680,17 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
       const scroller = document.querySelector('[class*="scrollBody"]');
       if (scroller === null) return;
+      // The hook is geometry-gated (24px gutters, 80% of the scroller), and a
+      // session that just mounted has not been laid out yet: the first pass
+      // saw width 0, tagged nothing, and the transcript kept upstream's fixed
+      // pixel floors until a stray scroll triggered the next slow pass. Retry
+      // a few times instead of waiting for one (#150).
+      const needsRetry = () => {
+        if (scroller.querySelector("[data-rdsh-transcript]") !== null) return;
+        if (transcriptRetries >= 5) return;
+        transcriptRetries += 1;
+        setTimeout(() => scheduleDecorate(), 80 * transcriptRetries);
+      };
       for (const node of scroller.querySelectorAll('[class*="_scroll"], [class*="_column"]')) {
         // A node this plugin already tagged stays tagged: the tag is what sets
         // the 16px gutters, so the "24px or more" heuristic below can never
@@ -7643,8 +7706,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         }
         const column = node.querySelector('[class*="_column"]');
         if (column !== null) column.setAttribute("data-rdsh-transcript-column", "");
+        transcriptRetries = 0;
         return;
       }
+      needsRetry();
     }
 
     function decorateUserBubbles() {
@@ -10749,9 +10814,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       confirmMobileExit();
     }
 
+    /** Whether this phone has a hardware back key (the guard's only reason). */
+    function androidBackKey() {
+      return /Android/i.test(navigator.userAgent || "");
+    }
+
     function installMobileBack() {
       const history = window.history;
-      if (!phone() || typeof history?.pushState !== "function") return () => {};
+      // iOS owns the screen-edge gesture. A history entry of ours turns that
+      // native swipe into an in-app navigation ("the tab went back"), which
+      // 1.0.0 never did: there, an edge swipe at the history start did nothing
+      // and the left panel swipe stayed stable. Android's hardware back is the
+      // only back this guard exists for.
+      if (!phone() || !androidBackKey() || typeof history?.pushState !== "function") return () => {};
       const withMarker = (level) => ({ ...history.state, [BACK_STATE]: level });
       const supportedState = () => history.state == null
         || (typeof history.state === "object" && !Array.isArray(history.state));
@@ -10800,10 +10875,20 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // gesture pulls the preview/right sidebar (the app's own "Open right
     // sidebar"). While the preview is open the left-to-right swipe closes it.
     let edgeSwipe = null;
+    /** How far from the left edge the OS Back gesture is claimed. */
+    const EDGE_SUPPRESS_PX = 28;
+
     function onEdgeSwipeStart(event) {
       edgeSwipe = null;
       if (!phone() || event.touches.length !== 1) return;
       const first = event.touches[0];
+      // iOS Safari and the installed PWA walk their history on a swipe that
+      // starts at the screen edge, which leaves the current screen (the
+      // "swiping right goes back" report). A page that cancels that touch
+      // keeps the gesture, so the drawer swipe below runs instead of a
+      // navigation. Every screen gets the same treatment: the listener is
+      // registered non-passive (see the boot block).
+      if (first.clientX <= EDGE_SUPPRESS_PX && event.cancelable) event.preventDefault();
       if (document.querySelector("[data-rdsh-lightbox], [data-rdsh-crop-overlay], [data-shortcut-modal=settings]") !== null) return;
       const touch = event.touches[0];
       const target = event.target;
@@ -13883,6 +13968,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (shown === markedSession) return;
       markedSession = shown;
       rememberLastSession(shown);
+      // A session switch replaces the transcript; let the next pass run the
+      // geometry-gated work instead of waiting out the one-second gate.
+      lastSlowAt = 0;
     }
 
     /**
@@ -15408,11 +15496,23 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      (680px and friends), so on a 390px phone the transcript is wider than the
      column and gets clipped. Size it from the column instead. These custom
      properties are the app's own knobs for exactly that. */
+  /* The upstream slot carries the same sizing from the first paint: waiting
+     for this plugin's hook (decorate) let one frame of upstream's fixed pixel
+     floors show, which is the "the chat snaps wider once it loads" report. */
+  [data-slot="conversation"],
+  [data-slot="main.conversation"],
+  /* The upstream slot carries the same sizing from the first paint: waiting
+     for this plugin's hook (decorate) let one frame of upstream's fixed pixel
+     floors show, which is the "the chat snaps wider once it loads" report. */
+  [data-slot="conversation"],
+  [data-slot="main.conversation"],
   [data-rdsh-conversation] {
     --dsh-chat-user-width: 100% !important;
     --dsh-chat-content-width: 100% !important;
     --dsh-composer-card-max-width: 100% !important;
   }
+  [data-slot="conversation"] > *,
+  [data-slot="main.conversation"] > *,
   [data-rdsh-conversation] > * {
     width: 100% !important;
     min-width: 0 !important;
@@ -16605,8 +16705,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         window.addEventListener("orientationchange", onOrientation);
         // The pin has to follow every pan frame, so it is registered ahead of
         // (and does not wait for) the coalesced layout pass below.
-        window.visualViewport?.addEventListener("resize", fitVisualViewport);
-        window.visualViewport?.addEventListener("scroll", fitVisualViewport);
+        window.visualViewport?.addEventListener("resize", scheduleFitVisualViewport);
+        window.visualViewport?.addEventListener("scroll", scheduleFitVisualViewport);
         fitVisualViewport();
         // The visual viewport reports the keyboard and the rotation's own
         // resize; without it an iPhone keyboard can leave the layout sized for
@@ -16629,7 +16729,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         document.addEventListener("dragend", onDragEndCapture, true);
         document.addEventListener("dblclick", onSessionTitleDoubleClick, true);
         document.addEventListener("contextmenu", onSessionContextMenu, true);
-        document.addEventListener("touchstart", onEdgeSwipeStart, true);
+        document.addEventListener("touchstart", onEdgeSwipeStart, { capture: true, passive: false });
         document.addEventListener("touchmove", onEdgeSwipeMove, { capture: true, passive: false });
         document.addEventListener("touchend", onEdgeSwipeEnd, true);
         document.addEventListener("touchcancel", onEdgeSwipeEnd, true);
@@ -16763,8 +16863,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             window.removeEventListener("orientationchange", onOrientation);
             window.visualViewport?.removeEventListener("resize", onLayoutResize);
             window.visualViewport?.removeEventListener("scroll", onLayoutResize);
-            window.visualViewport?.removeEventListener("resize", fitVisualViewport);
-            window.visualViewport?.removeEventListener("scroll", fitVisualViewport);
+            window.visualViewport?.removeEventListener("resize", scheduleFitVisualViewport);
+            window.visualViewport?.removeEventListener("scroll", scheduleFitVisualViewport);
             document.documentElement.removeAttribute("data-rdsh-keyboard");
             removeHeightProbe();
             document.removeEventListener("focusout", onKeyboardFocusOut, true);

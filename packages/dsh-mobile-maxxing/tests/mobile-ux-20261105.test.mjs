@@ -198,11 +198,13 @@ function pinHarness({ drawer = "open", dialog = null } = {}) {
 		attributes: new Set(),
 		getAttribute(name) { return name === "data-rdsh-drawer" ? drawer : null; },
 		hasAttribute(name) { return this.attributes.has(name); },
+		setAttribute(name, value) { this.attributes.add(name); this.lastSet = [name, value]; },
+		removeAttribute(name) { this.attributes.delete(name); },
 		toggleAttribute(name, on) { if (on) this.attributes.add(name); else this.attributes.delete(name); },
 		style: { values: new Map(), setProperty(name, value) { this.values.set(name, value); } },
 	};
 	const sandbox = {
-		document: { documentElement: html, querySelector: (selector) => (selector === '[role="dialog"]' ? dialog : null) },
+		document: { documentElement: html, querySelector: (selector) => (/\[role="dialog"\]/.test(selector) ? dialog : null) },
 		window: { innerWidth: 390, innerHeight: 844, visualViewport: { height: 500, offsetTop: 0, scale: 1 } },
 		phone: () => true,
 		keyboardOpen: () => true,
@@ -429,4 +431,66 @@ test("a refused clipboard leaves the paste key a no-op", async () => {
 	h.sandbox.pasteTerminalClipboard({ section: "s1" });
 	await new Promise((r) => setTimeout(r, 0));
 	assert.deepEqual(h.state.sent, []);
+});
+
+// --------------------------------------------------------------------------
+// #148: the conversation is sized from the upstream slot, not the late hook
+// --------------------------------------------------------------------------
+
+test("the conversation width applies before this plugin's hook exists", () => {
+	const tick = String.fromCharCode(96);
+	const at = CLIENT.indexOf("const CSS_PHONE = " + tick);
+	const end = CLIENT.indexOf(tick + ";\n", at);
+	assert.ok(at > 0 && end > at, "the phone sheet exists");
+	const phone = CLIENT.slice(at, end);
+	assert.match(phone, /\[data-slot="conversation"\],/, "the upstream slot carries the sizing");
+	assert.match(phone, /\[data-slot="main.conversation"\],/, "the main slot too");
+	assert.match(phone, /\[data-slot="conversation"\] > \*/, "its children are sized the same way");
+});
+
+// --------------------------------------------------------------------------
+// #148: the conversation is sized from the upstream slot, not the late hook
+// --------------------------------------------------------------------------
+
+test("the conversation width applies before this plugin's hook exists", () => {
+	const tick = String.fromCharCode(96);
+	const at = CLIENT.indexOf("const CSS_PHONE = " + tick);
+	const end = CLIENT.indexOf(tick + ";\n", at);
+	assert.ok(at > 0 && end > at, "the phone sheet exists");
+	const phone = CLIENT.slice(at, end);
+	assert.match(phone, /\[data-slot="conversation"\],/, "the upstream slot carries the sizing");
+	assert.match(phone, /\[data-slot="main.conversation"\],/, "the main slot too");
+	assert.match(phone, /\[data-slot="conversation"\] > \*/, "its children are sized the same way");
+});
+
+// --------------------------------------------------------------------------
+// #149: the OS edge-back gesture is cancelled on a phone
+// --------------------------------------------------------------------------
+
+test("the left-edge touch is cancelled so the OS cannot navigate", () => {
+	assert.match(CLIENT, /const EDGE_SUPPRESS_PX = 28;/, "the edge zone is declared");
+	assert.match(CLIENT, /first\.clientX <= EDGE_SUPPRESS_PX && event\.cancelable\) event\.preventDefault\(\)/, "the edge touch is cancelled");
+	assert.match(CLIENT, /addEventListener\("touchstart", onEdgeSwipeStart, \{ capture: true, passive: false \}\)/, "a passive listener cannot cancel");
+});
+
+// --------------------------------------------------------------------------
+// #150: a freshly mounted transcript is retried instead of waiting a second
+// --------------------------------------------------------------------------
+
+test("the transcript hook retries while the new session is still unmeasured", () => {
+	assert.match(CLIENT, /let transcriptRetries = 0;/, "the retry counter exists");
+	assert.match(CLIENT, /if \(transcriptRetries >= 5\) return;/, "the retry is bounded");
+	assert.match(CLIENT, /setTimeout\(\(\) => scheduleDecorate\(\), 80 \* transcriptRetries\)/, "the retry re-runs the pass");
+	assert.match(CLIENT, /lastSlowAt = 0;/, "a session switch frees the slow gate");
+});
+
+// --------------------------------------------------------------------------
+// #151: keyboard frames are coalesced and repeated bands are skipped
+// --------------------------------------------------------------------------
+
+test("keyboard frames are coalesced into one fit per frame", () => {
+	assert.match(CLIENT, /function scheduleFitVisualViewport\(\) \{/, "the coalescer exists");
+	assert.match(CLIENT, /addEventListener\("resize", scheduleFitVisualViewport\)/, "resize goes through it");
+	assert.match(CLIENT, /addEventListener\("scroll", scheduleFitVisualViewport\)/, "scroll too");
+	assert.match(CLIENT, /height === fitHeight\) return;/, "an unchanged band writes nothing");
 });

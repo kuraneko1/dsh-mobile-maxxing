@@ -219,21 +219,18 @@ test("missing optional services do not throw or offer exit on a loading screen",
   assert.equal(h.dialog(), null);
 });
 
-test("Safari's trailing popstate for the drawer swipe is consumed, the next one is Back", () => {
-  // #141: the left edge belongs to the drawer on iOS too. Safari still runs
-  // its native Back for that same edge gesture and reports it as a popstate
-  // right after the drawer opened; that one must not close the drawer or
-  // navigate. A later Back is the hardware/Back intent again.
+test("iOS installs no history guard, so the browser keeps the edge gesture", () => {
+  // 1.0.0 had no history entry on iOS; 1.0.1 added one for Android-style
+  // Back, and Safari's native edge swipe started popping it (the "the tab
+  // went back" report). The guard is Android-only now: the drawer swipe
+  // stays, and no entry is pushed.
   const h = harness({ ios: true }); h.installMobileBack();
   swipe(h);
-  assert.equal(h.state.drawer, 1);
+  assert.equal(h.state.drawer, 1, "the drawer still opens on the left edge");
+  assert.equal(h.entries.length, 2, "no history entry is pushed on iOS");
   h.pop();
-  assert.equal(h.state.drawer, 1, "the drawer the swipe opened stays open");
-  assert.equal(h.state.homes, 0, "the gesture is not also a navigation");
-  assert.equal(h.dialog(), null);
-  h.advance(700);
-  h.pop();
-  assert.equal(h.state.homes, 1, "a later Back navigates normally");
+  assert.equal(h.state.drawer, 1, "an unrelated popstate does not close the drawer");
+  assert.equal(h.state.homes, 0, "and does not navigate");
 });
 
 test("task detail in a wide split returns to its list before Home", () => {
@@ -267,16 +264,7 @@ test("iOS left-edge swipe opens the drawer and shows no exit dialog (#141)", () 
   assert.equal(h.state.drawer, 1, "the drawer opens, as on Android");
   assert.equal(h.state.homes, 0, "the swipe is not Back");
   assert.equal(h.dialog(), null, "no exit confirmation on a drawer swipe");
-  // Safari's own Back for the edge gesture lands right after; it is consumed.
-  h.pop(); h.onEdgeSwipeEnd(touch(new Node(), 100, 100, "touchend"));
-  assert.equal(h.state.drawer, 1);
-  assert.equal(h.state.homes, 0);
-  assert.equal(h.dialog(), null);
-  // A Back with no preceding drawer swipe still navigates and then confirms.
-  h.advance(700); h.pop();
-  assert.equal(h.state.homes, 1);
-  h.pop();
-  assert.ok(h.dialog());
+  assert.equal(h.entries.length, 2, "iOS gets no guard entry");
 });
 
 test("short, vertical, reversed and central iOS swipes leave the drawer closed", () => {
