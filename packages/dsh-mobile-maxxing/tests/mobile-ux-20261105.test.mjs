@@ -365,3 +365,36 @@ test("the phone sheet stops iOS from autosizing the transcript", () => {
 	assert.ok(!desktop.includes("text-size-adjust"), "a desktop keeps the browser default");
 });
 
+
+// --------------------------------------------------------------------------
+// #146: a modal's own text field keeps focus and stays 16px
+// --------------------------------------------------------------------------
+
+test("a field inside a modal is not blurred by the focus guard", () => {
+	const src = CLIENT.slice(CLIENT.indexOf("    function modalOwnedField("), CLIENT.indexOf("    function onFocusInGuard("));
+	assert.ok(src.includes("modalOwnedField"), "the helper is present");
+	const body = CLIENT.slice(CLIENT.indexOf("    function modalOwnedField("), CLIENT.indexOf("\n    }\n", CLIENT.indexOf("    function modalOwnedField(")) + 6);
+	const sandbox = {
+		field: null,
+	};
+	vm.createContext(sandbox);
+	vm.runInContext(body, sandbox);
+	const shell = { closest: () => null };
+	const modal = { closest: (sel) => sel === '[role="dialog"]' ? shell : null };
+	const nested = { closest: (sel) => sel === '[role="dialog"]' ? modal : null };
+	assert.equal(sandbox.modalOwnedField(nested), true, "a nested dialog's field is the user's");
+	assert.equal(sandbox.modalOwnedField({ closest: () => shell }), false, "the shell alone is not a modal");
+	assert.equal(sandbox.modalOwnedField({ closest: () => null }), false, "a plain field is untouched");
+});
+
+test("a modal's fields are pinned to 16px on the phone only", () => {
+	const tick = String.fromCharCode(96);
+	const at = CLIENT.indexOf("const CSS_PHONE = " + tick);
+	const end = CLIENT.indexOf(tick + ";\n", at);
+	assert.ok(at > 0 && end > at, "the phone sheet exists");
+	const phone = CLIENT.slice(at, end);
+	assert.match(phone, /\[role="dialog"\] \[role="dialog"\] \[contenteditable="true"\]/, "the modal's editable field is matched");
+	assert.match(phone, /font-size: 16px !important/, "iOS is not given a reason to zoom");
+	const desktop = CLIENT.slice(CLIENT.indexOf("const CSS_DEVICE"), CLIENT.indexOf("const CSS_PHONE"));
+	assert.ok(!desktop.includes('role="dialog"] [role="dialog"]'), "a desktop keeps its own sizes");
+});

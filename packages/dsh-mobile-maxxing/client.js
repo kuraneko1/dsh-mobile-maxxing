@@ -12177,6 +12177,23 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * @param {Element|null} field - the focused text field.
      * @returns {boolean} whether the open drawer contains it.
      */
+    /**
+     * A field inside a modal the user opened over the app (#146).
+     *
+     * The shell itself is a dialog on 0.2.2, so "inside a dialog" is not enough:
+     * only a dialog nested in the shell counts as a modal. The directory
+     * picker's path field is one, and the guard used to blur it 0ms after the
+     * tap, so the keyboard flashed and closed.
+     *
+     * @param {Element} field - the text box that just took focus.
+     * @returns {boolean} whether the field belongs to an open modal.
+     */
+    function modalOwnedField(field) {
+      const dialog = field.closest('[role="dialog"]');
+      if (dialog === null) return false;
+      return dialog.closest('[role="dialog"]') !== null;
+    }
+
     function drawerOwnedField(field) {
       if (field === null || field === undefined || typeof field.closest !== "function") return false;
       const root = document && document.documentElement;
@@ -12193,6 +12210,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // App/session opening and programmatic refocusing do not open a keyboard.
       if (field === allowFocusElement) return;
       if (drawerOwnedField(field)) return;
+      if (modalOwnedField(field)) return;
       // Deferred: Safari/the app re-focuses synchronously from its onFocus
       // handler, so an immediate blur() recurses until the stack overflows.
       setTimeout(() => {
@@ -15936,6 +15954,16 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   /* The answer field takes its height from a hidden mirror, so both layers
      must share the font size (16px here stops iOS from zooming on focus). */
   [data-rdsh-question-card] [class*="_field"] > * { font-size: 16px !important; }
+
+  /* A modal opened over the app (the directory picker, a rename sheet) takes
+     the keyboard in place. iOS zooms the whole page when the focused field is
+     under 16px, which reads as the dialog scaling itself to fit; the shell is
+     a dialog too, so only nested dialogs are matched. */
+  [role="dialog"] [role="dialog"] [contenteditable="true"],
+  [role="dialog"] [role="dialog"] textarea,
+  [role="dialog"] [role="dialog"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) {
+    font-size: 16px !important;
+  }
   /* The on-screen keyboard shrinks the layout viewport, and upstream's 60vh
      cap then collapsed the card to its header and footer before the answer
      field. While a field inside the card has focus, size the card from the
