@@ -7442,6 +7442,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     let lastSlowAt = 0;
+    /** Passes spent waiting for a fresh transcript to be measurable (#150). */
+    let transcriptRetries = 0;
 
     /**
      * The session breadcrumb navigation (#97).
@@ -7628,6 +7630,17 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
       const scroller = document.querySelector('[class*="scrollBody"]');
       if (scroller === null) return;
+      // The hook is geometry-gated (24px gutters, 80% of the scroller), and a
+      // session that just mounted has not been laid out yet: the first pass
+      // saw width 0, tagged nothing, and the transcript kept upstream's fixed
+      // pixel floors until a stray scroll triggered the next slow pass. Retry
+      // a few times instead of waiting for one (#150).
+      const needsRetry = () => {
+        if (scroller.querySelector("[data-rdsh-transcript]") !== null) return;
+        if (transcriptRetries >= 5) return;
+        transcriptRetries += 1;
+        setTimeout(() => scheduleDecorate(), 80 * transcriptRetries);
+      };
       for (const node of scroller.querySelectorAll('[class*="_scroll"], [class*="_column"]')) {
         // A node this plugin already tagged stays tagged: the tag is what sets
         // the 16px gutters, so the "24px or more" heuristic below can never
@@ -7643,8 +7656,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         }
         const column = node.querySelector('[class*="_column"]');
         if (column !== null) column.setAttribute("data-rdsh-transcript-column", "");
+        transcriptRetries = 0;
         return;
       }
+      needsRetry();
     }
 
     function decorateUserBubbles() {
@@ -13903,6 +13918,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (shown === markedSession) return;
       markedSession = shown;
       rememberLastSession(shown);
+      // A session switch replaces the transcript; let the next pass run the
+      // geometry-gated work instead of waiting out the one-second gate.
+      lastSlowAt = 0;
     }
 
     /**

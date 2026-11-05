@@ -470,3 +470,14 @@ test("the left-edge touch is cancelled so the OS cannot navigate", () => {
 	assert.match(CLIENT, /first\.clientX <= EDGE_SUPPRESS_PX && event\.cancelable\) event\.preventDefault\(\)/, "the edge touch is cancelled");
 	assert.match(CLIENT, /addEventListener\("touchstart", onEdgeSwipeStart, \{ capture: true, passive: false \}\)/, "a passive listener cannot cancel");
 });
+
+// --------------------------------------------------------------------------
+// #150: a freshly mounted transcript is retried instead of waiting a second
+// --------------------------------------------------------------------------
+
+test("the transcript hook retries while the new session is still unmeasured", () => {
+	assert.match(CLIENT, /let transcriptRetries = 0;/, "the retry counter exists");
+	assert.match(CLIENT, /if \(transcriptRetries >= 5\) return;/, "the retry is bounded");
+	assert.match(CLIENT, /setTimeout\(\(\) => scheduleDecorate\(\), 80 \* transcriptRetries\)/, "the retry re-runs the pass");
+	assert.match(CLIENT, /lastSlowAt = 0;/, "a session switch frees the slow gate");
+});
