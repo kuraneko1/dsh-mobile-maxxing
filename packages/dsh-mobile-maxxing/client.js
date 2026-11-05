@@ -9359,6 +9359,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let presentedClickGuard = null;
     let presentedToolsInstalled = false;
 
+    // A share sheet only opens while the tap's user activation is still live,
+    // and iOS drops that activation as soon as the handler awaits a network
+    // read. The bytes are therefore fetched while the menu is open, so the
+    // tap itself can call navigator.share() without awaiting anything (#138).
+    const presentedPrefetch = new Map();
+
     /** What a presented card points at, from upstream's stable hooks only. */
     function presentedInfo(card) {
       const preview = card.querySelector("button[title]");
@@ -9582,6 +9588,70 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (!quiet) notify(t("presented.downloadStarted"));
     }
 
+    /** One menu's prefetched bytes, keyed by the card it belongs to. */
+    function presentedPrefetchKey(info) {
+      return `${info.sessionId}\u0000${info.path}`;
+    }
+
+    /** Start reading a card's bytes while its menu is on screen. */
+    function startPresentedPrefetch(info) {
+      if (!presentedCanShareFiles(info)) return;
+      // Only the card whose menu is open keeps bytes; an older entry is gone.
+      for (const key of presentedPrefetch.keys()) {
+        if (key !== presentedPrefetchKey(info)) presentedPrefetch.delete(key);
+      }
+      const key = presentedPrefetchKey(info);
+      if (presentedPrefetch.has(key)) return;
+      const entry = { blob: null };
+      presentedPrefetch.set(key, entry);
+      presentedFileBlob(info).then((blob) => {
+        entry.blob = blob;
+      }, () => {
+        presentedPrefetch.delete(key);
+      });
+    }
+
+    /** The bytes this tap may use, if the prefetch already finished. */
+    function takePresentedPrefetch(info) {
+      const key = presentedPrefetchKey(info);
+      const entry = presentedPrefetch.get(key) ?? null;
+      presentedPrefetch.delete(key);
+      return entry;
+    }
+
+    /**
+     * Share from a tap that still owns its user activation.
+     *
+     * With the bytes in hand the sheet opens without an await in between; a
+     * slow read falls back to the shared path below, and a refused sheet
+     * leaves the host download so the file is never lost.
+     */
+    async function sharePresentedFile(info) {
+      const entry = takePresentedPrefetch(info);
+      if (entry === null || entry.blob === null) {
+        await downloadPresentedFile(info, true);
+        return;
+      }
+      try {
+        await navigator.share({ files: [new File([entry.blob], info.name, { type: entry.blob.type })] });
+        return;
+      } catch (error) {
+        if (error?.name === "AbortError") return;
+        console.warn("[rdsh-mobile-ux] presented share failed", error);
+      }
+      try {
+        if (info.sessionId !== "") {
+          presentedDownloadViaEndpoint(info, true);
+          notify(t("presented.shareFailed"));
+        } else {
+          presentedSaveBlob(entry.blob, info.name);
+          notify(t("presented.downloadStarted"));
+        }
+      } catch {
+        notify(t("presented.downloadFailed"));
+      }
+    }
+
     async function downloadPresentedFile(info, share = false) {
       // A plain download needs no bytes in hand: let the host stream it.
       if (!share && info.sessionId !== "") {
@@ -9774,7 +9844,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // Only offer Share where the browser can actually share files;
         // elsewhere the item would silently turn into a download.
         if (presentedCanShareFiles(hit)) {
-          items.push(addPresentedMenuItem(menu, t("presented.share"), () => void downloadPresentedFile(hit, true)));
+          // Read now, so the tap can hand the file over before iOS drops the
+          // activation the sheet needs.
+          startPresentedPrefetch(hit);
+          items.push(addPresentedMenuItem(menu, t("presented.share"), () => void sharePresentedFile(hit)));
         }
       }
       items.push(addPresentedMenuItem(menu, t("presented.preview"), () => hit.preview?.click?.()));

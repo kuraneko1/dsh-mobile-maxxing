@@ -681,3 +681,50 @@ test("a dismissed share sheet is not a failure", async () => {
 	assert.equal(h.state.downloads, 0, "nothing else happens");
 	assert.deepEqual(h.state.toasts, [], "nothing is reported");
 });
+// --------------------------------------------------------------------------
+// #138 follow-up: share from a tap that still owns its user activation
+// --------------------------------------------------------------------------
+
+function shareBlock() {
+	const at = CLIENT.indexOf("    function presentedPrefetchKey(");
+	const end = CLIENT.indexOf("\n    async function downloadPresentedFile(", at);
+	assert.ok(at > 0 && end > at, "the share block is intact");
+	return "const presentedPrefetch = new Map();\n" + CLIENT.slice(at, end);
+}
+
+function shareTapHarness({ blob, share }) {
+	const state = { downloads: 0, shared: 0, toasts: [] };
+	const sandbox = {
+		presentedCanShareFiles: () => true,
+		presentedFileBlob: blob,
+		presentedDownloadViaEndpoint: () => { state.downloads += 1; },
+		downloadPresentedFile: async () => { state.downloads += 1; },
+		presentedSaveBlob: () => {},
+		notify: (m) => state.toasts.push(m),
+		t: (k) => k,
+		navigator: { share: async (data) => { state.shared += 1; state.last = data; await share?.(data); } },
+		File: class { constructor(parts, name, options) { this.name = name; this.type = options?.type; this.parts = parts; } },
+		console: { warn() {} },
+	};
+	vm.createContext(sandbox);
+	vm.runInContext(shareBlock(), sandbox);
+	return { state, sandbox };
+}
+
+test("share hands over the bytes fetched while the menu was open", async () => {
+	const h = shareTapHarness({ blob: async () => ({ type: "text/html" }) });
+	h.sandbox.startPresentedPrefetch({ sessionId: "s", path: "/w/a.html", name: "a.html" });
+	await new Promise((r) => setTimeout(r, 10));
+	await h.sandbox.sharePresentedFile({ sessionId: "s", path: "/w/a.html", name: "a.html" });
+	assert.equal(h.state.shared, 1, "the sheet is asked");
+	assert.equal(h.state.downloads, 0, "no download is needed");
+	assert.equal(h.state.last.files[0].name, "a.html");
+});
+
+test("share falls back to the shared path when the prefetch is not ready", async () => {
+	const h = shareTapHarness({ blob: async () => { await new Promise((r) => setTimeout(r, 200)); return { type: "text/html" }; } });
+	h.sandbox.startPresentedPrefetch({ sessionId: "s", path: "/w/a.html", name: "a.html" });
+	await h.sandbox.sharePresentedFile({ sessionId: "s", path: "/w/a.html", name: "a.html" });
+	assert.equal(h.state.shared, 0, "a cold prefetch does not call the sheet directly");
+	assert.equal(h.state.downloads, 1, "the download path runs instead");
+});
