@@ -204,7 +204,7 @@ function pinHarness({ drawer = "open", dialog = null } = {}) {
 		style: { values: new Map(), setProperty(name, value) { this.values.set(name, value); } },
 	};
 	const sandbox = {
-		document: { documentElement: html, querySelector: (selector) => (selector === '[data-rdsh-composer-root]' ? { style: {}, getBoundingClientRect: () => ({ bottom: 844, height: 129 }) } : (selector === '[role="dialog"]' ? dialog : null)) },
+		document: { documentElement: html, querySelector: (selector) => (/\[role="dialog"\]/.test(selector) ? dialog : null) },
 		window: { innerWidth: 390, innerHeight: 844, visualViewport: { height: 500, offsetTop: 0, scale: 1 } },
 		phone: () => true,
 		keyboardOpen: () => true,
@@ -219,14 +219,11 @@ test("the open drawer keeps the full-height layout while the keyboard is up", ()
 	assert.equal(h.html.hasAttribute("data-rdsh-keyboard"), false, "no keyboard pin while the drawer is open");
 });
 
-test("the chat screen lifts only the composer while the keyboard is up", () => {
+test("the chat screen still pins itself to the keyboard", () => {
 	const h = pinHarness({ drawer: "closed" });
 	h.fit();
-	assert.equal(h.html.hasAttribute("data-rdsh-kb-lift"), true);
-	// 844 layout, 500 visible, no pan: the keyboard covers 344px.
-	assert.equal(h.html.style.values.get("--rdsh-kb-lift"), "344px");
-	assert.equal(h.html.style.values.get("--rdsh-kb-composer"), "129px");
-	assert.equal(h.html.hasAttribute("data-rdsh-keyboard"), false, "the transcript is not re-flowed");
+	assert.equal(h.html.hasAttribute("data-rdsh-keyboard"), true);
+	assert.equal(h.html.style.values.get("--rdsh-vv-height"), "500px");
 });
 
 test("a dialog keeps owning its own geometry", () => {

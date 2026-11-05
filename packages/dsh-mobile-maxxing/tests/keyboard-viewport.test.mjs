@@ -31,28 +31,25 @@ function pinFor(viewport, { phone = true, innerHeight = 800, dvh = 800, dialog =
 	};
 	const probe = { style: {}, isConnected: false, setAttribute() {}, remove() { this.isConnected = false; }, getBoundingClientRect: () => ({ height: dvh }) };
 	const body = { append(node) { node.isConnected = true; } };
-	const composer = { style: {}, getBoundingClientRect: () => ({ bottom: innerHeight, height: 120 }) };
-	const document = { documentElement: root, body, createElement: () => probe, querySelector: (selector) => (selector === '[data-rdsh-composer-root]' ? (dialog ? null : composer) : (dialog ? {} : null)) };
+	const document = { documentElement: root, body, createElement: () => probe, querySelector: () => dialog ? {} : null };
 	const sandbox = { window: { visualViewport: viewport, innerHeight, innerWidth }, document, Math, phone: () => phone };
 	vm.runInNewContext(`${CLIENT.slice(start, end)}\nfitVisualViewport();`, sandbox);
 	return { attributes: [...attributes.keys()], properties: Object.fromEntries(properties) };
 }
 
-test("with the keyboard up only the composer is lifted by the covered height", () => {
-	// 800px layout, 480px left above the keyboard, panned 150px down by Safari:
-	// the keyboard covers 800 - 480 - 150 = 170px, and only that is lifted.
+test("with the keyboard up the app is pinned to the visual viewport", () => {
+	// 800px layout, 480px left above the keyboard, panned 150px down by Safari.
 	const open = pinFor({ height: 480, offsetTop: 150, scale: 1 });
-	assert.deepEqual(open.attributes, ["data-rdsh-kb-lift"]);
-	assert.deepEqual(open.properties, { "--rdsh-kb-lift": "170px", "--rdsh-kb-composer": "120px" });
+	assert.deepEqual(open.attributes, ["data-rdsh-keyboard"]);
+	assert.deepEqual(open.properties, { "--rdsh-vv-top": "150px", "--rdsh-vv-height": "480px" });
 });
 
-test("a browser that already shrank innerHeight needs no lift", () => {
-	// innerHeight follows the keyboard (480) but 100dvh keeps the web view height:
-	// the fixed composer already sits on the visible bottom, so the lift is zero.
-	const pinned = pinFor({ height: 480, offsetTop: 0, scale: 1 }, { innerHeight: 480, dvh: 800 });
-	assert.deepEqual(pinned.attributes, ["data-rdsh-kb-lift"]);
-	assert.equal(pinned.properties["--rdsh-kb-lift"], "0px");
-	// Everything shrank together: there is no keyboard band, so nothing is detached.
+test("the pin works when the browser shrinks innerHeight with the keyboard", () => {
+	// innerHeight follows the keyboard (480) but 100dvh keeps the web view height.
+	const open = pinFor({ height: 480, offsetTop: 0, scale: 1 }, { innerHeight: 480, dvh: 800 });
+	assert.deepEqual(open.attributes, ["data-rdsh-keyboard"]);
+	assert.equal(open.properties["--rdsh-vv-height"], "480px");
+	// Everything shrank together: the layout already fits, nothing to pin.
 	assert.deepEqual(pinFor({ height: 480, offsetTop: 0, scale: 1 }, { innerHeight: 480, dvh: 480 }).attributes, []);
 });
 

@@ -3319,38 +3319,32 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // its own keyboard geometry (the directory picker, Settings).
       const modal = document.querySelector('[role="dialog"] [role="dialog"]');
       const open = phone() && !landscape && !drawer && viewport !== null && viewport !== undefined && modal === null && keyboardOpen();
-      const drop = () => {
-        if (root.hasAttribute("data-rdsh-kb-lift")) root.removeAttribute("data-rdsh-kb-lift");
+      if (!open) {
+        if (root.hasAttribute("data-rdsh-keyboard")) root.removeAttribute("data-rdsh-keyboard");
         fitTop = -1;
         fitHeight = -1;
-      };
-      if (!open) {
-        drop();
         return;
       }
       const top = Math.max(0, Math.round(viewport.offsetTop));
       const height = Math.round(viewport.height);
-      // The keyboard covers this much of the layout viewport below the visible
-      // band. The transcript's scroll area is shortened by it (#153): the
-      // composer then sits right above the keyboard, the newest rows stay
-      // reachable by scrolling, and nothing is re-flowed per keyboard frame.
-      if (root.hasAttribute("data-rdsh-kb-lift") && top === fitTop && height === fitHeight) return;
+      // The animation repeats the same band for a few frames; writing it again
+      // costs another layout and changes nothing.
+      if (root.hasAttribute("data-rdsh-keyboard") && top === fitTop && height === fitHeight) return;
       fitTop = top;
       fitHeight = height;
-      // Detach the composer first, then measure where that leaves it (#155).
-      // An installed PWA already pins a fixed element to the visual viewport,
-      // while a Safari tab keeps it on the layout bottom and needs the
-      // difference; measuring covers both without a mode switch.
-      root.setAttribute("data-rdsh-kb-lift", "");
-      const composer = document.querySelector("[data-rdsh-composer-root]");
-      if (composer === null) {
-        root.style.setProperty("--rdsh-kb-lift", "0px");
-        return;
+      root.setAttribute("data-rdsh-keyboard", "");
+      root.style.setProperty("--rdsh-vv-top", `${top}px`);
+      root.style.setProperty("--rdsh-vv-height", `${height}px`);
+      // Reserve the room only for a transcript that actually scrolls: a short
+      // conversation sits at the top, and padding it would only push it away
+      // (the "the reply vanished when the keyboard opened" report).
+      const scroller = document.querySelector("[class*=scrollBody]");
+      const transcript = document.querySelector("[data-rdsh-transcript]");
+      if (transcript !== null) {
+        const overflows = scroller !== null && scroller.scrollHeight > scroller.clientHeight + 8;
+        if (overflows) transcript.setAttribute("data-rdsh-kb-room", "");
+        else transcript.removeAttribute("data-rdsh-kb-room");
       }
-      const box = composer.getBoundingClientRect();
-      const need = Math.max(0, Math.round(box.bottom - top - height));
-      root.style.setProperty("--rdsh-kb-lift", need + "px");
-      root.style.setProperty("--rdsh-kb-composer", Math.round(box.height) + "px");
     }
 
     function measureSafeArea() {
@@ -15353,18 +15347,6 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      against the app on every keyboard frame. It takes the transform for that,
      not "contain": containment stops body's background from reaching the
      canvas, which then paints black in the strip under the app. */
-  /* Keyboard up (#154): the composer leaves the column and floats above the
-     keyboard, so the transcript keeps its whole layout and only the input
-     moves. The transcript reserves the lifted composer's height, which is
-     what lets the newest row be scrolled clear of it. */
-  html[data-rdsh-kb-lift] [data-rdsh-composer-root] {
-    position: fixed; left: 12px; right: 12px; bottom: 0;
-    transform: translateY(calc(-1 * var(--rdsh-kb-lift, 0px)));
-    z-index: 60;
-  }
-  html[data-rdsh-kb-lift] [data-rdsh-transcript] {
-    padding-bottom: calc(var(--rdsh-kb-lift, 0px) + var(--rdsh-kb-composer, 0px) + 16px) !important;
-  }
   html[data-rdsh-keyboard],
   html[data-rdsh-keyboard] body {
     height: var(--rdsh-vv-height) !important;
