@@ -15445,6 +15445,12 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     padding-left: 16px !important;
     padding-right: 16px !important;
   }
+  /* While the keyboard is up the composer floats over the transcript (#152),
+     so the newest rows need that much extra scroll room; without it a short
+     conversation leaves the agent's reply behind the composer. */
+  html[data-rdsh-kb-lift] [data-rdsh-transcript] {
+    padding-bottom: calc(var(--rdsh-kb-lift, 0px) + 16px) !important;
+  }
   /* Use the available conversation width, including on tablets. */
   [data-rdsh-transcript-column] {
     width: 100% !important;
