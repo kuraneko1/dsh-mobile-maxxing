@@ -3315,22 +3315,31 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // the composer pin belongs to the chat screen only.
       const drawer = root.getAttribute("data-rdsh-drawer") === "open";
       const open = phone() && !landscape && !drawer && viewport !== null && viewport !== undefined && document.querySelector('[role="dialog"]') === null && keyboardOpen();
-      if (!open) {
-        if (root.hasAttribute("data-rdsh-keyboard")) root.removeAttribute("data-rdsh-keyboard");
+      const drop = () => {
+        if (root.hasAttribute("data-rdsh-kb-lift")) root.removeAttribute("data-rdsh-kb-lift");
         fitTop = -1;
         fitHeight = -1;
+      };
+      if (!open) {
+        drop();
         return;
       }
       const top = Math.max(0, Math.round(viewport.offsetTop));
       const height = Math.round(viewport.height);
-      // The animation repeats the same band for a few frames; writing it again
-      // costs another layout and changes nothing.
-      if (root.hasAttribute("data-rdsh-keyboard") && top === fitTop && height === fitHeight) return;
+      // The keyboard covers this much of the layout viewport below the visible
+      // band. The transcript's scroll area is shortened by it (#153): the
+      // composer then sits right above the keyboard, the newest rows stay
+      // reachable by scrolling, and nothing is re-flowed per keyboard frame.
+      const covered = Math.max(0, Math.round((window.innerHeight || height) - height - top));
+      if (covered <= 0) {
+        drop();
+        return;
+      }
+      if (root.hasAttribute("data-rdsh-kb-lift") && top === fitTop && covered === fitHeight) return;
       fitTop = top;
-      fitHeight = height;
-      root.setAttribute("data-rdsh-keyboard", "");
-      root.style.setProperty("--rdsh-vv-top", `${top}px`);
-      root.style.setProperty("--rdsh-vv-height", `${height}px`);
+      fitHeight = covered;
+      root.setAttribute("data-rdsh-kb-lift", "");
+      root.style.setProperty("--rdsh-kb-lift", `${covered}px`);
       // Reserve the room only for a transcript that actually scrolls: a short
       // conversation sits at the top, and padding it would only push it away
       // (the "the reply vanished when the keyboard opened" report).
@@ -15343,6 +15352,13 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      against the app on every keyboard frame. It takes the transform for that,
      not "contain": containment stops body's background from reaching the
      canvas, which then paints black in the strip under the app. */
+  /* Keyboard up (#153): shorten the transcript's scroll area by the covered
+     height. The composer follows it in the same column, so it lands right above
+     the keyboard while the transcript keeps its own layout, and the newest rows
+     can still be scrolled into view. */
+  html[data-rdsh-kb-lift] [class*="scrollBody"] {
+    max-height: calc(100% - var(--rdsh-kb-lift, 0px)) !important;
+  }
   html[data-rdsh-keyboard],
   html[data-rdsh-keyboard] body {
     height: var(--rdsh-vv-height) !important;
