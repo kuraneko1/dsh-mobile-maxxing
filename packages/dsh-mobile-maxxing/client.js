@@ -3330,32 +3330,23 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // band. The transcript's scroll area is shortened by it (#153): the
       // composer then sits right above the keyboard, the newest rows stay
       // reachable by scrolling, and nothing is re-flowed per keyboard frame.
-      const covered = Math.max(0, Math.round((window.innerHeight || height) - height - top));
-      if (covered <= 0) {
-        drop();
+      if (root.hasAttribute("data-rdsh-kb-lift") && top === fitTop && height === fitHeight) return;
+      fitTop = top;
+      fitHeight = height;
+      // Detach the composer first, then measure where that leaves it (#155).
+      // An installed PWA already pins a fixed element to the visual viewport,
+      // while a Safari tab keeps it on the layout bottom and needs the
+      // difference; measuring covers both without a mode switch.
+      root.setAttribute("data-rdsh-kb-lift", "");
+      const composer = document.querySelector("[data-rdsh-composer-root]");
+      if (composer === null) {
+        root.style.setProperty("--rdsh-kb-lift", "0px");
         return;
       }
-      if (root.hasAttribute("data-rdsh-kb-lift") && top === fitTop && covered === fitHeight) return;
-      fitTop = top;
-      fitHeight = covered;
-      // The composer is detached (fixed) while lifted, so the transcript needs
-      // its height in the reserved room (#154).
-      const composer = document.querySelector("[data-rdsh-composer-root]");
-      if (composer !== null) {
-        root.style.setProperty("--rdsh-kb-composer", Math.round(composer.getBoundingClientRect().height) + "px");
-      }
-      root.setAttribute("data-rdsh-kb-lift", "");
-      root.style.setProperty("--rdsh-kb-lift", `${covered}px`);
-      // Reserve the room only for a transcript that actually scrolls: a short
-      // conversation sits at the top, and padding it would only push it away
-      // (the "the reply vanished when the keyboard opened" report).
-      const scroller = document.querySelector("[class*=scrollBody]");
-      const transcript = document.querySelector("[data-rdsh-transcript]");
-      if (transcript !== null) {
-        const overflows = scroller !== null && scroller.scrollHeight > scroller.clientHeight + 8;
-        if (overflows) transcript.setAttribute("data-rdsh-kb-room", "");
-        else transcript.removeAttribute("data-rdsh-kb-room");
-      }
+      const box = composer.getBoundingClientRect();
+      const need = Math.max(0, Math.round(box.bottom - top - height));
+      root.style.setProperty("--rdsh-kb-lift", need + "px");
+      root.style.setProperty("--rdsh-kb-composer", Math.round(box.height) + "px");
     }
 
     function measureSafeArea() {

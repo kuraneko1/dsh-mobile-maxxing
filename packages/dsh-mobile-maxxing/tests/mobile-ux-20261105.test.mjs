@@ -204,7 +204,7 @@ function pinHarness({ drawer = "open", dialog = null } = {}) {
 		style: { values: new Map(), setProperty(name, value) { this.values.set(name, value); } },
 	};
 	const sandbox = {
-		document: { documentElement: html, querySelector: (selector) => (selector === '[role="dialog"]' ? dialog : null) },
+		document: { documentElement: html, querySelector: (selector) => (selector === '[data-rdsh-composer-root]' ? { style: {}, getBoundingClientRect: () => ({ bottom: 844, height: 129 }) } : (selector === '[role="dialog"]' ? dialog : null)) },
 		window: { innerWidth: 390, innerHeight: 844, visualViewport: { height: 500, offsetTop: 0, scale: 1 } },
 		phone: () => true,
 		keyboardOpen: () => true,
@@ -225,6 +225,7 @@ test("the chat screen lifts only the composer while the keyboard is up", () => {
 	assert.equal(h.html.hasAttribute("data-rdsh-kb-lift"), true);
 	// 844 layout, 500 visible, no pan: the keyboard covers 344px.
 	assert.equal(h.html.style.values.get("--rdsh-kb-lift"), "344px");
+	assert.equal(h.html.style.values.get("--rdsh-kb-composer"), "129px");
 	assert.equal(h.html.hasAttribute("data-rdsh-keyboard"), false, "the transcript is not re-flowed");
 });
 
@@ -494,5 +495,5 @@ test("keyboard frames are coalesced into one fit per frame", () => {
 	assert.match(CLIENT, /function scheduleFitVisualViewport\(\) \{/, "the coalescer exists");
 	assert.match(CLIENT, /addEventListener\("resize", scheduleFitVisualViewport\)/, "resize goes through it");
 	assert.match(CLIENT, /addEventListener\("scroll", scheduleFitVisualViewport\)/, "scroll too");
-	assert.match(CLIENT, /covered === fitHeight\) return;/, "an unchanged band writes nothing");
+	assert.match(CLIENT, /height === fitHeight\) return;/, "an unchanged band writes nothing");
 });
