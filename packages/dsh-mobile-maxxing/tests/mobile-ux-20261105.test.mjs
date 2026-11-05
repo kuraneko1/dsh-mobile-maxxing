@@ -219,11 +219,13 @@ test("the open drawer keeps the full-height layout while the keyboard is up", ()
 	assert.equal(h.html.hasAttribute("data-rdsh-keyboard"), false, "no keyboard pin while the drawer is open");
 });
 
-test("the chat screen still pins itself to the keyboard", () => {
+test("the chat screen lifts only the composer while the keyboard is up", () => {
 	const h = pinHarness({ drawer: "closed" });
 	h.fit();
-	assert.equal(h.html.hasAttribute("data-rdsh-keyboard"), true);
-	assert.equal(h.html.style.values.get("--rdsh-vv-height"), "500px");
+	assert.equal(h.html.hasAttribute("data-rdsh-kb-lift"), true);
+	// 844 layout, 500 visible, no pan: the keyboard covers 344px.
+	assert.equal(h.html.style.values.get("--rdsh-kb-lift"), "344px");
+	assert.equal(h.html.hasAttribute("data-rdsh-keyboard"), false, "the transcript is not re-flowed");
 });
 
 test("a dialog keeps owning its own geometry", () => {
@@ -492,5 +494,5 @@ test("keyboard frames are coalesced into one fit per frame", () => {
 	assert.match(CLIENT, /function scheduleFitVisualViewport\(\) \{/, "the coalescer exists");
 	assert.match(CLIENT, /addEventListener\("resize", scheduleFitVisualViewport\)/, "resize goes through it");
 	assert.match(CLIENT, /addEventListener\("scroll", scheduleFitVisualViewport\)/, "scroll too");
-	assert.match(CLIENT, /top === fitTop && height === fitHeight\) return;/, "an unchanged band writes nothing");
+	assert.match(CLIENT, /covered === fitHeight\) return;/, "an unchanged band writes nothing");
 });
