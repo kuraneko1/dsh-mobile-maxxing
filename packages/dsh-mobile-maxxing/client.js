@@ -10749,9 +10749,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       confirmMobileExit();
     }
 
+    /** Whether this phone has a hardware back key (the guard's only reason). */
+    function androidBackKey() {
+      return /Android/i.test(navigator.userAgent || "");
+    }
+
     function installMobileBack() {
       const history = window.history;
-      if (!phone() || typeof history?.pushState !== "function") return () => {};
+      // iOS owns the screen-edge gesture. A history entry of ours turns that
+      // native swipe into an in-app navigation ("the tab went back"), which
+      // 1.0.0 never did: there, an edge swipe at the history start did nothing
+      // and the left panel swipe stayed stable. Android's hardware back is the
+      // only back this guard exists for.
+      if (!phone() || !androidBackKey() || typeof history?.pushState !== "function") return () => {};
       const withMarker = (level) => ({ ...history.state, [BACK_STATE]: level });
       const supportedState = () => history.state == null
         || (typeof history.state === "object" && !Array.isArray(history.state));
@@ -15408,11 +15418,18 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      (680px and friends), so on a 390px phone the transcript is wider than the
      column and gets clipped. Size it from the column instead. These custom
      properties are the app's own knobs for exactly that. */
+  /* The upstream slot carries the same sizing from the first paint: waiting
+     for this plugin's hook (decorate) let one frame of upstream's fixed pixel
+     floors show, which is the "the chat snaps wider once it loads" report. */
+  [data-slot="conversation"],
+  [data-slot="main.conversation"],
   [data-rdsh-conversation] {
     --dsh-chat-user-width: 100% !important;
     --dsh-chat-content-width: 100% !important;
     --dsh-composer-card-max-width: 100% !important;
   }
+  [data-slot="conversation"] > *,
+  [data-slot="main.conversation"] > *,
   [data-rdsh-conversation] > * {
     width: 100% !important;
     min-width: 0 !important;

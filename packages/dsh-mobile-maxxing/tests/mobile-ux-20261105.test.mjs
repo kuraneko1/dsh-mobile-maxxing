@@ -430,3 +430,18 @@ test("a refused clipboard leaves the paste key a no-op", async () => {
 	await new Promise((r) => setTimeout(r, 0));
 	assert.deepEqual(h.state.sent, []);
 });
+
+// --------------------------------------------------------------------------
+// #148: the conversation is sized from the upstream slot, not the late hook
+// --------------------------------------------------------------------------
+
+test("the conversation width applies before this plugin's hook exists", () => {
+	const tick = String.fromCharCode(96);
+	const at = CLIENT.indexOf("const CSS_PHONE = " + tick);
+	const end = CLIENT.indexOf(tick + ";\n", at);
+	assert.ok(at > 0 && end > at, "the phone sheet exists");
+	const phone = CLIENT.slice(at, end);
+	assert.match(phone, /\[data-slot="conversation"\],/, "the upstream slot carries the sizing");
+	assert.match(phone, /\[data-slot="main.conversation"\],/, "the main slot too");
+	assert.match(phone, /\[data-slot="conversation"\] > \*/, "its children are sized the same way");
+});
