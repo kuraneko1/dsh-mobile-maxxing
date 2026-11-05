@@ -7564,6 +7564,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // writes the colour frame and every other row hook only in the phone
       // layout (#44); on a desktop it clears leftovers from a narrower pass.
       decorateSessionRows();
+      decorateSessionLimit();
       decorateRouteHeading();
       decorateRouteBack();
       decorateQueueDock();
@@ -7699,6 +7700,70 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const scroller = sessionListScroller();
         if (scroller !== null) scroller.scrollTop = Math.min(drawerScrollTop, Math.max(0, scroller.scrollHeight - scroller.clientHeight));
       }, 0);
+    }
+
+    // ---------------------------------------------------------------------
+    // Session list: one page at a time (#143)
+    // ---------------------------------------------------------------------
+    /**
+     * Rows the drawer renders before "Show more sessions".
+     *
+     * Upstream paints the whole catalog, so a phone with hundreds of sessions
+     * spends its first frame on titles the user never asked for. The deco-
+     * ration pass only tags the rows past the page (and the markup itself is
+     * untouched), so scrolling, search and every row action keep working; the
+     * button below the list raises the limit by one page.
+     */
+    const SESSION_PAGE_SIZE = 20;
+    let sessionLimit = SESSION_PAGE_SIZE;
+    let sessionLimitOpen = false;
+
+    /** Forget the page tags and the button (desktop, or no drawer). */
+    function clearSessionLimit() {
+      for (const row of document.querySelectorAll("[data-rdsh-session-overflow]")) row.removeAttribute("data-rdsh-session-overflow");
+      document.querySelector("[data-rdsh-session-more]")?.remove();
+    }
+
+    function decorateSessionLimit() {
+      const sidebar = document.querySelector("[data-rdsh-sidebar]");
+      if (!phone() || sidebar === null) {
+        clearSessionLimit();
+        return;
+      }
+      const open = document.documentElement.getAttribute("data-rdsh-drawer") === "open";
+      // A drawer the user opens again starts from the first page.
+      if (open && !sessionLimitOpen) sessionLimit = SESSION_PAGE_SIZE;
+      sessionLimitOpen = open;
+      // The search result set is upstream's own (bounded) list, not the
+      // catalog: limiting it would hide matches the user is looking for.
+      const search = sidebar.querySelector("input");
+      const paged = search === null || (search.value || "") === "";
+      const rows = [...sidebar.querySelectorAll('[data-row-key^="session:"]')];
+      rows.forEach((row, index) => {
+        if (paged && index >= sessionLimit) row.setAttribute("data-rdsh-session-overflow", "");
+        else row.removeAttribute("data-rdsh-session-overflow");
+      });
+      const hidden = paged ? Math.max(0, rows.length - sessionLimit) : 0;
+      let more = sidebar.querySelector("[data-rdsh-session-more]");
+      if (hidden === 0) {
+        more?.remove();
+        return;
+      }
+      if (more === null) {
+        const scroller = sessionListScroller();
+        if (scroller === null) return;
+        more = document.createElement("button");
+        more.type = "button";
+        more.className = "rdsh-mux-session-more";
+        more.setAttribute("data-rdsh-session-more", "");
+        more.addEventListener("click", () => {
+          sessionLimit += SESSION_PAGE_SIZE;
+          scheduleDecorate();
+        });
+        scroller.append(more);
+      }
+      const label = t("mux.sessions.more");
+      if (more.textContent !== label) more.textContent = label;
     }
 
     function toggleDrawer() {
@@ -15048,6 +15113,20 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   }
   html[data-rdsh-drawer="open"] .rdsh-mux-backdrop { display: block; opacity: 1; pointer-events: auto; }
   .rdsh-mux-fab { display: flex; }
+
+  /* #143: one page of session rows. The tag is written by
+     decorateSessionLimit() and leaves the row itself untouched, so opening the
+     session, its menu and every row action keep their own DOM. */
+  [data-rdsh-session-overflow] { display: none !important; }
+  .rdsh-mux-session-more {
+    display: flex; align-items: center; justify-content: center;
+    box-sizing: border-box; width: calc(100% - 8px); min-height: 40px;
+    margin: 6px 4px 10px; padding: 0 10px;
+    border: 0; border-radius: 8px; background: transparent;
+    color: var(--dsw-alias-link, #4d6bfe); font: inherit; font-size: 13px;
+    cursor: pointer;
+  }
+  .rdsh-mux-session-more:active { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); }
   html[data-rdsh-drawer="open"] .rdsh-mux-fab { display: none; }
 
   /* Keyboard up: the app is exactly the visible area (see fitVisualViewport).

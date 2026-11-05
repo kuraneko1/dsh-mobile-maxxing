@@ -88,3 +88,100 @@ test("a deliberate tap on the field itself is unchanged", () => {
 	h.sandbox.pointer({ target: h.field });
 	assert.equal(h.focus(), 0, "onFocusPointer already authorised this field");
 });
+
+// ---------------------------------------------------------------------------
+// #143: the session list renders one page (20 rows) at a time
+// ---------------------------------------------------------------------------
+
+const LIMIT_START = "    const SESSION_PAGE_SIZE = 20;";
+const LIMIT_END = "    function toggleDrawer()";
+
+function pagingHarness({ rows: rowCount = 21, drawer = "open", search = "", phone = true } = {}) {
+	class Node {
+		constructor(tag = "div") {
+			this.tagName = tag;
+			this.attributes = new Map();
+			this.children = [];
+			this.listeners = new Map();
+			this.textContent = "";
+		}
+		setAttribute(name, value) { this.attributes.set(name, String(value)); }
+		removeAttribute(name) { this.attributes.delete(name); }
+		hasAttribute(name) { return this.attributes.has(name); }
+		addEventListener(type, fn) { this.listeners.set(type, fn); }
+		append(node) { this.children.push(node); }
+		remove() { this.removed = true; }
+		click() { this.listeners.get("click")?.({ type: "click" }); }
+	}
+	const rows = Array.from({ length: rowCount }, () => new Node("div"));
+	const more = [];
+	const scroller = new Node("div");
+	scroller.append = (node) => { more.push(node); };
+	const searchField = search === null ? null : { value: search };
+	const sidebar = {
+		querySelectorAll: (selector) => (selector === '[data-row-key^="session:"]' ? rows : []),
+		querySelector: (selector) => {
+			if (selector === "input") return searchField;
+			if (selector === "[data-rdsh-session-more]") return more.find((node) => node.isConnected !== false) ?? null;
+			return null;
+		},
+	};
+	const document = {
+		documentElement: { getAttribute: (name) => (name === "data-rdsh-drawer" ? drawer : null) },
+		querySelector: (selector) => (selector === "[data-rdsh-sidebar]" ? sidebar : null),
+		querySelectorAll: (selector) => (selector === "[data-rdsh-session-overflow]" ? rows.filter((row) => row.hasAttribute("data-rdsh-session-overflow")) : []),
+		createElement: (tag) => new Node(tag),
+	};
+	let decorates = 0;
+	const sandbox = {
+		document, Node,
+		phone: () => phone,
+		t: (key) => (key === "mux.sessions.more" ? "Show more sessions" : key),
+		sessionListScroller: () => scroller,
+		scheduleDecorate: () => { decorates += 1; },
+	};
+	vm.runInNewContext(slice(LIMIT_START, LIMIT_END) + "\nthis.decorateLimit = decorateSessionLimit; this.limit = () => sessionLimit;", sandbox);
+	return { rows, more, sidebar, sandbox, decorate: () => sandbox.decorateLimit(), decorates: () => decorates };
+}
+
+const hidden = (h) => h.rows.filter((row) => row.hasAttribute("data-rdsh-session-overflow")).length;
+
+test("21 sessions show the first 20 and a Show more button", () => {
+	const h = pagingHarness();
+	h.decorate();
+	assert.equal(hidden(h), 1, "the 21st row is the only hidden one");
+	assert.equal(h.more.length, 1, "one button is appended");
+	assert.equal(h.more[0].textContent, "Show more sessions");
+	assert.equal(h.sandbox.limit(), 20);
+});
+
+test("Show more reveals the next page and then retires the button", () => {
+	const h = pagingHarness();
+	h.decorate();
+	h.more[0].click();
+	assert.equal(h.decorates(), 1, "the click asks for a decorate pass");
+	assert.equal(h.sandbox.limit(), 40);
+	h.decorate();
+	assert.equal(hidden(h), 0, "all 21 rows are visible");
+	assert.equal(h.more[0].removed, true, "no button when nothing is left");
+});
+
+test("a search result set is never paged", () => {
+	const h = pagingHarness({ search: "qa" });
+	h.decorate();
+	assert.equal(hidden(h), 0);
+	assert.equal(h.more.length, 0);
+});
+
+test("a closing drawer keeps its page, a desktop has no paging at all", () => {
+	// The drawer slide-out is 300ms; dropping the page at the same instant
+	// would paint the whole catalog while the list is still leaving.
+	const closed = pagingHarness({ drawer: "closed" });
+	closed.decorate();
+	assert.equal(hidden(closed), 1, "the page stays applied while the drawer closes");
+	const desktop = pagingHarness({ phone: false });
+	desktop.rows[3].setAttribute("data-rdsh-session-overflow", "");
+	desktop.decorate();
+	assert.equal(hidden(desktop), 0, "a desktop keeps every session row");
+});
+
