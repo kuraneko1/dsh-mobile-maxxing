@@ -3315,30 +3315,32 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // the composer pin belongs to the chat screen only.
       const drawer = root.getAttribute("data-rdsh-drawer") === "open";
       const open = phone() && !landscape && !drawer && viewport !== null && viewport !== undefined && document.querySelector('[role="dialog"]') === null && keyboardOpen();
-      const drop = () => {
-        if (root.hasAttribute("data-rdsh-kb-lift")) root.removeAttribute("data-rdsh-kb-lift");
+      if (!open) {
+        if (root.hasAttribute("data-rdsh-keyboard")) root.removeAttribute("data-rdsh-keyboard");
         fitTop = -1;
         fitHeight = -1;
-      };
-      if (!open) {
-        drop();
         return;
       }
       const top = Math.max(0, Math.round(viewport.offsetTop));
       const height = Math.round(viewport.height);
-      // The keyboard covers this much of the layout viewport, below the visible
-      // band. Only the composer is lifted by it: the transcript keeps its
-      // layout instead of being re-flowed on every keyboard frame (#152).
-      const covered = Math.max(0, Math.round((window.innerHeight || height) - height - top));
-      if (covered <= 0) {
-        drop();
-        return;
-      }
-      if (root.hasAttribute("data-rdsh-kb-lift") && top === fitTop && covered === fitHeight) return;
+      // The animation repeats the same band for a few frames; writing it again
+      // costs another layout and changes nothing.
+      if (root.hasAttribute("data-rdsh-keyboard") && top === fitTop && height === fitHeight) return;
       fitTop = top;
-      fitHeight = covered;
-      root.setAttribute("data-rdsh-kb-lift", "");
-      root.style.setProperty("--rdsh-kb-lift", `${covered}px`);
+      fitHeight = height;
+      root.setAttribute("data-rdsh-keyboard", "");
+      root.style.setProperty("--rdsh-vv-top", `${top}px`);
+      root.style.setProperty("--rdsh-vv-height", `${height}px`);
+      // Reserve the room only for a transcript that actually scrolls: a short
+      // conversation sits at the top, and padding it would only push it away
+      // (the "the reply vanished when the keyboard opened" report).
+      const scroller = document.querySelector("[class*=scrollBody]");
+      const transcript = document.querySelector("[data-rdsh-transcript]");
+      if (transcript !== null) {
+        const overflows = scroller !== null && scroller.scrollHeight > scroller.clientHeight + 8;
+        if (overflows) transcript.setAttribute("data-rdsh-kb-room", "");
+        else transcript.removeAttribute("data-rdsh-kb-room");
+      }
     }
 
     function measureSafeArea() {
@@ -15341,14 +15343,6 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      against the app on every keyboard frame. It takes the transform for that,
      not "contain": containment stops body's background from reaching the
      canvas, which then paints black in the strip under the app. */
-  /* Keyboard up (#152): the composer is lifted by the covered height and the
-     transcript keeps its layout. The old body pin re-flowed every message on
-     each keyboard frame, which is what made opening the input feel heavy. */
-  html[data-rdsh-kb-lift] [data-rdsh-composer-root] {
-    transform: translateY(calc(-1 * var(--rdsh-kb-lift, 0px)));
-    will-change: transform;
-    z-index: 60;
-  }
   html[data-rdsh-keyboard],
   html[data-rdsh-keyboard] body {
     height: var(--rdsh-vv-height) !important;
@@ -15444,12 +15438,6 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   [data-rdsh-transcript] {
     padding-left: 16px !important;
     padding-right: 16px !important;
-  }
-  /* While the keyboard is up the composer floats over the transcript (#152),
-     so the newest rows need that much extra scroll room; without it a short
-     conversation leaves the agent's reply behind the composer. */
-  html[data-rdsh-kb-lift] [data-rdsh-transcript] {
-    padding-bottom: calc(var(--rdsh-kb-lift, 0px) + 16px) !important;
   }
   /* Use the available conversation width, including on tablets. */
   [data-rdsh-transcript-column] {
