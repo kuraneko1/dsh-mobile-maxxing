@@ -15030,6 +15030,15 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   }
   body { display: grid !important; grid-template-rows: 100dvh !important; }
   #root { height: 100% !important; min-height: 0 !important; box-sizing: border-box !important; }
+  /* #145: iOS Safari's text autosizing inflates block text from the block's
+     width and re-evaluates only on a viewport change, so the transcript kept
+     its boot-time size until the phone was rotated. This is a fixed-layout
+     PWA with its own text sizes (Settings > Body text), so autosizing is off.
+     Phone sheet only: a desktop keeps the browser's default. */
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
   [data-rdsh-scroll] { overscroll-behavior-y: contain; }
 
   /* One slide for both sheets, so opening and closing read the same whether

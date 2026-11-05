@@ -344,3 +344,24 @@ test("a desktop pass animates nothing", () => {
 	assert.equal(h.animations.length, 0);
 });
 
+
+// ---------------------------------------------------------------------------
+// #145: iOS text autosizing is disabled on the phone sheet only
+// ---------------------------------------------------------------------------
+
+function stylesheet(name) {
+	const marker = "const " + name + " = " + String.fromCharCode(96);
+	const at = CLIENT.indexOf(marker);
+	assert.ok(at >= 0, name + " exists");
+	const end = CLIENT.indexOf(String.fromCharCode(96) + ";", at + marker.length);
+	assert.ok(end > at, name + " is closed");
+	return CLIENT.slice(at + marker.length, end);
+}
+
+test("the phone sheet stops iOS from autosizing the transcript", () => {
+	const phone = stylesheet("CSS_PHONE");
+	assert.match(phone, /html \{\s*-webkit-text-size-adjust: 100%;\s*text-size-adjust: 100%;\s*\}/, "both declarations, on html");
+	const desktop = stylesheet("CSS_DEVICE");
+	assert.ok(!desktop.includes("text-size-adjust"), "a desktop keeps the browser default");
+});
+
