@@ -3285,7 +3285,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // Dialogs and landscape composers own their scroll and focus geometry;
       // pinning them to the keyboard-shrunk viewport hides the input itself.
       const landscape = window.innerWidth > window.innerHeight;
-      const open = phone() && !landscape && viewport !== null && viewport !== undefined && document.querySelector('[role="dialog"]') === null && keyboardOpen();
+      // #142: the drawer is a full-height overlay inside body. Pinning body to
+      // the keyboard band clips it, so opening the session search made the
+      // drawer slide out of sight. The drawer scrolls and focuses on its own;
+      // the composer pin belongs to the chat screen only.
+      const drawer = root.getAttribute("data-rdsh-drawer") === "open";
+      const open = phone() && !landscape && !drawer && viewport !== null && viewport !== undefined && document.querySelector('[role="dialog"]') === null && keyboardOpen();
       root.toggleAttribute("data-rdsh-keyboard", open);
       if (!open) return;
       root.style.setProperty("--rdsh-vv-top", `${Math.max(0, Math.round(viewport.offsetTop))}px`);
@@ -5334,6 +5339,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     const UNTITLED = probeRegex("untitled", "i", ["new session", "new chat", "untitled"], true);
     /** Last title seen per target, so only the first naming animates. */
     const titleSeen = new Map();
+    /**
+     * Targets whose first real title of this page load is recorded (#144).
+     *
+     * A cold start paints a row with its raw id (or nothing) before the
+     * catalog resolves. That placeholder-to-title transition is a baseline,
+     * not a naming event, so it must not type.
+     */
+    const titleReady = new Set();
     /** How many passes each target has played; a session is named twice. */
     const titlePasses = new Map();
     /** Passes allowed per session: the initial label, then the model's name. */
@@ -5733,27 +5746,42 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         else if (previous === undefined) titleSeen.set(key, "");
         if (text === "") continue;
         // First sight is the baseline: a page reload must not retype history.
-        if (previous === undefined || previous === text) continue;
+        // A real title here also proves the row is named, so a later change to
+        // it is a rename. An id or an untitled label is a placeholder: the real
+        // title that follows is still a baseline (see the branch below).
+        if (previous === undefined) {
+          if (!untitled(text) && text !== id) titleReady.add(key);
+          continue;
+        }
+        if (previous === text) continue;
         const passes = titlePasses.get(key) ?? 0;
         if (passes >= TITLE_PASSES) continue;
-        // An unnamed session shows the working directory or its raw id in the
-        // header, so "untitled" alone misses the case this animation is for.
-        // A name is generated while the session works (or right after), and a
-        // manual rename later does not qualify.
-        const generated = working
-          || untitled(previous)
-          || previous === id
-          || now - (titleWorkingAt.get(key) ?? 0) < NAME_GRACE_MS;
-        // The first pass is the initial label. The second is the name the model
-        // settles on, which arrives on its own schedule, so it is allowed
-        // without the running window and erases the label first.
-        if (passes === 0 && !generated) continue;
+        // #144: the first real title of this page load is a baseline, not a
+        // naming event. A cold PWA start paints a row with its raw id (or
+        // nothing) before the catalog resolves; treating that as "untitled ->
+        // named" typed every existing session at once on the phone.
+        if (!titleReady.has(key)) {
+          titleReady.add(key);
+          const named = working
+            || now - (titleWorkingAt.get(key) ?? 0) < NAME_GRACE_MS
+            // Only a session that was seen working can have been unnamed at
+            // its first sight; a boot row was never in the running set.
+            || (untitled(previous) && titleWorkingAt.has(key));
+          if (!named) continue;
+        }
+        // After the baseline, a change is either the name the model settled on
+        // (the row's first label is replaced) or a rename; both type once.
+        // TITLE_PASSES caps the passes so a stream of re-renders cannot loop.
         titlePasses.set(key, passes + 1);
         // Why the running animation is cancelled rather than awaited: waiting
         // would reveal the new name the moment the layer is removed, and only
         // then start erasing it — a pop followed by a pointless animation.
         const active = titleAnimations.get(key);
-        const eraseFrom = active === undefined ? (passes === 0 ? "" : previous) : active.visible();
+        // Erase whatever is on screen first: a rename clears the old name, and
+        // a session's generated name clears its "New session" label. Only the
+        // very first paint had nothing to erase, and that paint is a baseline
+        // now, so it never reaches this line.
+        const eraseFrom = active === undefined ? previous : active.visible();
         active?.cancel();
         const controller = animateSessionTitle(element, text, eraseFrom);
         if (controller === null) titleAnimations.delete(key);
@@ -7564,6 +7592,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // writes the colour frame and every other row hook only in the phone
       // layout (#44); on a desktop it clears leftovers from a narrower pass.
       decorateSessionRows();
+      decorateSessionLimit();
       decorateRouteHeading();
       decorateRouteBack();
       decorateQueueDock();
@@ -7699,6 +7728,70 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const scroller = sessionListScroller();
         if (scroller !== null) scroller.scrollTop = Math.min(drawerScrollTop, Math.max(0, scroller.scrollHeight - scroller.clientHeight));
       }, 0);
+    }
+
+    // ---------------------------------------------------------------------
+    // Session list: one page at a time (#143)
+    // ---------------------------------------------------------------------
+    /**
+     * Rows the drawer renders before "Show more sessions".
+     *
+     * Upstream paints the whole catalog, so a phone with hundreds of sessions
+     * spends its first frame on titles the user never asked for. The deco-
+     * ration pass only tags the rows past the page (and the markup itself is
+     * untouched), so scrolling, search and every row action keep working; the
+     * button below the list raises the limit by one page.
+     */
+    const SESSION_PAGE_SIZE = 20;
+    let sessionLimit = SESSION_PAGE_SIZE;
+    let sessionLimitOpen = false;
+
+    /** Forget the page tags and the button (desktop, or no drawer). */
+    function clearSessionLimit() {
+      for (const row of document.querySelectorAll("[data-rdsh-session-overflow]")) row.removeAttribute("data-rdsh-session-overflow");
+      document.querySelector("[data-rdsh-session-more]")?.remove();
+    }
+
+    function decorateSessionLimit() {
+      const sidebar = document.querySelector("[data-rdsh-sidebar]");
+      if (!phone() || sidebar === null) {
+        clearSessionLimit();
+        return;
+      }
+      const open = document.documentElement.getAttribute("data-rdsh-drawer") === "open";
+      // A drawer the user opens again starts from the first page.
+      if (open && !sessionLimitOpen) sessionLimit = SESSION_PAGE_SIZE;
+      sessionLimitOpen = open;
+      // The search result set is upstream's own (bounded) list, not the
+      // catalog: limiting it would hide matches the user is looking for.
+      const search = sidebar.querySelector("input");
+      const paged = search === null || (search.value || "") === "";
+      const rows = [...sidebar.querySelectorAll('[data-row-key^="session:"]')];
+      rows.forEach((row, index) => {
+        if (paged && index >= sessionLimit) row.setAttribute("data-rdsh-session-overflow", "");
+        else row.removeAttribute("data-rdsh-session-overflow");
+      });
+      const hidden = paged ? Math.max(0, rows.length - sessionLimit) : 0;
+      let more = sidebar.querySelector("[data-rdsh-session-more]");
+      if (hidden === 0) {
+        more?.remove();
+        return;
+      }
+      if (more === null) {
+        const scroller = sessionListScroller();
+        if (scroller === null) return;
+        more = document.createElement("button");
+        more.type = "button";
+        more.className = "rdsh-mux-session-more";
+        more.setAttribute("data-rdsh-session-more", "");
+        more.addEventListener("click", () => {
+          sessionLimit += SESSION_PAGE_SIZE;
+          scheduleDecorate();
+        });
+        scroller.append(more);
+      }
+      const label = t("mux.sessions.more");
+      if (more.textContent !== label) more.textContent = label;
     }
 
     function toggleDrawer() {
@@ -10508,7 +10601,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     const BACK_STATE = "dsh-mobile-maxxing:back";
     let exitDialog = null;
     let exitTimer = 0;
-    let lastBackSwipe = -Infinity;
+    // When this module's own left-edge swipe opened the drawer (#141). iOS
+    // Safari runs its native Back for the same edge gesture before any JS can
+    // cancel it, and that popstate arrives right after the drawer opened. The
+    // user asked for the drawer; the native Back must not close it again.
+    let lastDrawerSwipe = -Infinity;
 
     function iosBackGesture() {
       return /iPad|iPhone|iPod/.test(`${navigator.userAgent || ""} ${navigator.platform || ""}`)
@@ -10675,10 +10772,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const onBack = (event) => {
         if (event.state?.[BACK_STATE] !== "base") return;
         if (!guard()) return;
-        // Safari may report native history navigation for the same edge
-        // gesture. Whichever arrives first owns it; never go back twice.
+        // Safari reports its own native Back for the edge gesture that just
+        // opened the drawer. That popstate is the same gesture, not a second
+        // intent: consume it instead of closing the drawer the user asked for.
         edgeSwipe = null;
-        if (iosBackGesture() && Date.now() - lastBackSwipe < 600) return;
+        if (iosBackGesture() && Date.now() - lastDrawerSwipe < 600) return;
         mobileBack();
       };
       arm();
@@ -10696,24 +10794,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       };
     }
 
-    // Edge swipe from the left opens the session drawer on Android; on iOS
-    // it uses the same Back action as history navigation. From the right it
-    // pulls the preview/right sidebar (the app's own "Open right sidebar").
-    // While the preview is open the left-to-right gesture closes it instead.
+    // Edge swipe from the left opens the session drawer on every platform,
+    // iOS included (#141): the drawer is the only thing the left edge owns.
+    // Back is the Android hardware key (popstate) alone. From the right the
+    // gesture pulls the preview/right sidebar (the app's own "Open right
+    // sidebar"). While the preview is open the left-to-right swipe closes it.
     let edgeSwipe = null;
     function onEdgeSwipeStart(event) {
       edgeSwipe = null;
       if (!phone() || event.touches.length !== 1) return;
       const first = event.touches[0];
-      if (iosBackGesture() && first.clientX <= 36) {
-        lastBackSwipe = -Infinity;
-        if (event.target instanceof Element) {
-          if (event.target.closest('input, textarea, [contenteditable=true], .xterm, [data-dockkit-strip], [data-dockkit-tab]') !== null) return;
-          if (scrolledLeftAncestor(event.target) !== null) return;
-        }
-        edgeSwipe = { x: first.clientX, y: first.clientY, back: true, ready: false };
-        return;
-      }
       if (document.querySelector("[data-rdsh-lightbox], [data-rdsh-crop-overlay], [data-shortcut-modal=settings]") !== null) return;
       const touch = event.touches[0];
       const target = event.target;
@@ -10790,12 +10880,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const touch = event.touches[0];
       const dx = touch.clientX - edgeSwipe.x;
       const dy = touch.clientY - edgeSwipe.y;
-      if (edgeSwipe.back) {
-        if (Math.abs(dy) > 24 || dx < -10) { edgeSwipe = null; return; }
-        if (dx > 4 && event.cancelable) event.preventDefault();
-        edgeSwipe.ready = dx >= 64 && dx > Math.abs(dy) * 2;
-        return;
-      }
       // A vertical finger belongs to the list under it: drop the gesture and
       // let the scroll proceed. Once the movement is clearly horizontal the
       // page must not scroll, or opening the drawer also drags the session
@@ -10839,6 +10923,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (dx < 64) return;
       edgeSwipe = null;
       if (event.cancelable) event.preventDefault();
+      // iOS Safari's native Back for this same edge gesture arrives as the
+      // next popstate; onBack() sees this stamp and lets the drawer stand.
+      lastDrawerSwipe = Date.now();
       toggleDrawer();
     }
     /**
@@ -10863,14 +10950,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clearTimeout(tabReplayTimer);
       cancelLongPress();
     }
-    function onEdgeSwipeEnd(event) {
-      const back = edgeSwipe?.back && edgeSwipe.ready && event?.type !== "touchcancel";
+    function onEdgeSwipeEnd() {
+      // The gesture itself has already run on the move that crossed the
+      // threshold; the end only drops the state (#141 removed the iOS Back
+      // branch, so nothing is deferred to touchend any more).
       edgeSwipe = null;
       endTerminalDrag();
-      if (back) {
-        lastBackSwipe = Date.now();
-        mobileBack();
-      }
     }
 
     // ---------------------------------------------------------------------
@@ -12079,6 +12164,27 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       event.stopPropagation();
     }
 
+    /**
+     * A field the open phone drawer owns (#142).
+     *
+     * Upstream's session search expands and focuses its own input from the
+     * search button's click; the focus is programmatic, so the "deliberate
+     * focus only" guard used to blur it one tick later: the keyboard flickered
+     * and every search lost its input. The drawer only exists because the user
+     * opened it, and its rows are what the user is tapping, so a field inside
+     * it is a deliberate target.
+     *
+     * @param {Element|null} field - the focused text field.
+     * @returns {boolean} whether the open drawer contains it.
+     */
+    function drawerOwnedField(field) {
+      if (field === null || field === undefined || typeof field.closest !== "function") return false;
+      const root = document && document.documentElement;
+      if (root === null || root === undefined || typeof root.getAttribute !== "function") return false;
+      if (root.getAttribute("data-rdsh-drawer") !== "open") return false;
+      return field.closest("[data-rdsh-sidebar]") !== null;
+    }
+
     function onFocusInGuard(event) {
       if (!phone()) return;
       const field = textBoxOf(event.target);
@@ -12086,6 +12192,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // Only a field deliberately chosen by pointer or Tab may keep focus.
       // App/session opening and programmatic refocusing do not open a keyboard.
       if (field === allowFocusElement) return;
+      if (drawerOwnedField(field)) return;
       // Deferred: Safari/the app re-focuses synchronously from its onFocus
       // handler, so an immediate blur() recurses until the stack overflows.
       setTimeout(() => {
@@ -14923,6 +15030,15 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   }
   body { display: grid !important; grid-template-rows: 100dvh !important; }
   #root { height: 100% !important; min-height: 0 !important; box-sizing: border-box !important; }
+  /* #145: iOS Safari's text autosizing inflates block text from the block's
+     width and re-evaluates only on a viewport change, so the transcript kept
+     its boot-time size until the phone was rotated. This is a fixed-layout
+     PWA with its own text sizes (Settings > Body text), so autosizing is off.
+     Phone sheet only: a desktop keeps the browser's default. */
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
   [data-rdsh-scroll] { overscroll-behavior-y: contain; }
 
   /* One slide for both sheets, so opening and closing read the same whether
@@ -15034,6 +15150,20 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   }
   html[data-rdsh-drawer="open"] .rdsh-mux-backdrop { display: block; opacity: 1; pointer-events: auto; }
   .rdsh-mux-fab { display: flex; }
+
+  /* #143: one page of session rows. The tag is written by
+     decorateSessionLimit() and leaves the row itself untouched, so opening the
+     session, its menu and every row action keep their own DOM. */
+  [data-rdsh-session-overflow] { display: none !important; }
+  .rdsh-mux-session-more {
+    display: flex; align-items: center; justify-content: center;
+    box-sizing: border-box; width: calc(100% - 8px); min-height: 40px;
+    margin: 6px 4px 10px; padding: 0 10px;
+    border: 0; border-radius: 8px; background: transparent;
+    color: var(--dsw-alias-link, #4d6bfe); font: inherit; font-size: 13px;
+    cursor: pointer;
+  }
+  .rdsh-mux-session-more:active { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); }
   html[data-rdsh-drawer="open"] .rdsh-mux-fab { display: none; }
 
   /* Keyboard up: the app is exactly the visible area (see fitVisualViewport).

@@ -44,6 +44,10 @@ function harness({ ios = false, mobile = true, initialState = { upstream: "kept"
   const listeners = new Map();
   const timers = new Map();
   let timer = 0;
+  // A controllable clock: the drawer swipe and Safari's trailing popstate are
+  // told apart by a timestamp, and a real 600ms wait per case would slow the
+  // suite for no added coverage.
+  let clock = 1_000_000;
   const state = { session: "session-1", workspace: "workspace-1", openedWorkspaces: [], panel: null, overlays: [], crop: null, detail: null, collapse: null, closes: 0, homes: 0, cleared: 0, drawer: 0, toasts: [] };
   const entries = [{ outside: true }, initialState];
   let index = 1;
@@ -71,7 +75,7 @@ function harness({ ios = false, mobile = true, initialState = { upstream: "kept"
     removeEventListener: (type, fn) => { if (listeners.get(`document:${type}`) === fn) listeners.delete(`document:${type}`); },
   };
   const sandbox = {
-    document: doc, Element: Node,
+    document: doc, Element: Node, Date: { now: () => clock },
     navigator: { userAgent: ios ? "iPhone" : "Android", platform: ios ? "iPhone" : "Linux", maxTouchPoints: 5 },
     phone: () => mobile,
     hostCtx: { get: (key) => key === "workspaces" ? workspaces : key === "uiWorkspace" ? workspace : key === "layout" ? layout : key === "sessions" ? { list: { getSnapshot: () => ({ byId: { [state.session]: { blank: state.blank === true } } }) } } : undefined },
@@ -108,6 +112,7 @@ function harness({ ios = false, mobile = true, initialState = { upstream: "kept"
     pop() { index--; listeners.get("popstate")?.({ state: entries[index] }); },
     firePop(value) { listeners.get("popstate")?.({ state: value }); },
     flush() { for (const [id, fn] of [...timers]) { timers.delete(id); fn(); } },
+    advance(ms) { clock += ms; },
   };
 }
 
@@ -214,11 +219,21 @@ test("missing optional services do not throw or offer exit on a loading screen",
   assert.equal(h.dialog(), null);
 });
 
-test("a second iOS native swipe inside the deduplication window is a separate Back", () => {
-  const h = harness({ ios: true }); h.installMobileBack(); swipe(h); h.pop();
-  const target = new Node(); h.onEdgeSwipeStart(touch(target, 8, 100));
+test("Safari's trailing popstate for the drawer swipe is consumed, the next one is Back", () => {
+  // #141: the left edge belongs to the drawer on iOS too. Safari still runs
+  // its native Back for that same edge gesture and reports it as a popstate
+  // right after the drawer opened; that one must not close the drawer or
+  // navigate. A later Back is the hardware/Back intent again.
+  const h = harness({ ios: true }); h.installMobileBack();
+  swipe(h);
+  assert.equal(h.state.drawer, 1);
   h.pop();
-  assert.ok(h.dialog());
+  assert.equal(h.state.drawer, 1, "the drawer the swipe opened stays open");
+  assert.equal(h.state.homes, 0, "the gesture is not also a navigation");
+  assert.equal(h.dialog(), null);
+  h.advance(700);
+  h.pop();
+  assert.equal(h.state.homes, 1, "a later Back navigates normally");
 });
 
 test("task detail in a wide split returns to its list before Home", () => {
@@ -246,40 +261,44 @@ test("detail returns to its parent before the full-screen panel returns Home", (
   h.mobileBack(); assert.equal(h.state.homes, 1); assert.equal(h.state.panel, null);
 });
 
-test("iOS left-edge right swipe uses Back once and does not open the drawer", () => {
+test("iOS left-edge swipe opens the drawer and shows no exit dialog (#141)", () => {
   const h = harness({ ios: true }); h.installMobileBack();
   swipe(h);
-  assert.equal(h.state.homes, 1); assert.equal(h.state.drawer, 0);
+  assert.equal(h.state.drawer, 1, "the drawer opens, as on Android");
+  assert.equal(h.state.homes, 0, "the swipe is not Back");
+  assert.equal(h.dialog(), null, "no exit confirmation on a drawer swipe");
+  // Safari's own Back for the edge gesture lands right after; it is consumed.
+  h.pop(); h.onEdgeSwipeEnd(touch(new Node(), 100, 100, "touchend"));
+  assert.equal(h.state.drawer, 1);
+  assert.equal(h.state.homes, 0);
+  assert.equal(h.dialog(), null);
+  // A Back with no preceding drawer swipe still navigates and then confirms.
+  h.advance(700); h.pop();
+  assert.equal(h.state.homes, 1);
   h.pop();
-  assert.equal(h.dialog(), null, "the same Safari native swipe must not show exit confirmation");
-  swipe(h);
   assert.ok(h.dialog());
 });
 
-test("native Safari Back arriving before touchend consumes the gesture", () => {
-  const h = harness({ ios: true }); h.installMobileBack();
-  const target = new Node();
-  h.onEdgeSwipeStart(touch(target, 8, 100));
-  h.onEdgeSwipeMove(touch(target, 100, 100));
-  h.pop(); h.onEdgeSwipeEnd(touch(target, 100, 100, "touchend"));
-  assert.equal(h.state.homes, 1); assert.equal(h.dialog(), null);
-});
-
-test("short, vertical, reversed, central and cancelled swipes leave the session open", () => {
-  for (const options of [{ dx: 30 }, { dy: 90 }, { dx: -80 }, { x: 100 }, { cancel: true }]) {
+test("short, vertical, reversed and central iOS swipes leave the drawer closed", () => {
+  for (const options of [{ dx: 30 }, { dy: 120 }, { dx: -80 }, { x: 100 }]) {
     const h = harness({ ios: true }); swipe(h, options);
+    assert.equal(h.state.drawer, 0, JSON.stringify(options));
     assert.equal(h.state.homes, 0, JSON.stringify(options));
   }
+  // A cancelled touch that already crossed the threshold has opened the
+  // drawer, exactly like the Android gesture: the move owns the action.
+  const cancelled = harness({ ios: true }); swipe(cancelled, { cancel: true });
+  assert.equal(cancelled.state.drawer, 1);
 });
 
-test("multiple touches cancel Back and input/scroller/tab gestures retain ownership", () => {
+test("input and multi-touch gestures retain ownership on iOS", () => {
   const h = harness({ ios: true }); const target = new Node();
   h.onEdgeSwipeStart(touch(target, 8, 100));
   h.onEdgeSwipeMove(touch(target, 100, 100, "touchmove", 2));
   h.onEdgeSwipeMove(touch(target, 150, 100));
   h.onEdgeSwipeEnd(touch(target, 150, 100, "touchend"));
   const input = new Node(); input.excluded = true; swipe(h, { target: input });
-  const scroller = new Node(); scroller.scrolled = true; swipe(h, { target: scroller });
+  assert.equal(h.state.drawer, 0, "a form field keeps its own gesture");
   assert.equal(h.state.homes, 0);
 });
 
@@ -333,13 +352,13 @@ test("Android Back inherits the current Workspace rather than clearing its selec
   h.pop(); assert.ok(h.dialog(), "the inherited blank is Home on the next Back");
 });
 
-test("iOS swipe inherits the current Workspace and the next swipe confirms exit", () => {
+test("iOS Back inherits the current Workspace and the next Back confirms exit", () => {
   const h = harness({ ios: true }); h.state.workspace = "ios-workspace";
-  swipe(h);
+  h.mobileBack();
   assert.equal(h.state.workspace, "ios-workspace");
   assert.deepEqual(h.state.openedWorkspaces, ["ios-workspace"]);
   assert.equal(h.state.cleared, 0);
-  swipe(h); assert.ok(h.dialog());
+  h.mobileBack(); assert.ok(h.dialog());
 });
 
 test("leaving a global panel preserves a blank Home and its draft session", () => {
