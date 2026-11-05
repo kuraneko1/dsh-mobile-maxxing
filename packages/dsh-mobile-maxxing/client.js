@@ -3338,6 +3338,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (root.hasAttribute("data-rdsh-kb-lift") && top === fitTop && covered === fitHeight) return;
       fitTop = top;
       fitHeight = covered;
+      // The composer is detached (fixed) while lifted, so the transcript needs
+      // its height in the reserved room (#154).
+      const composer = document.querySelector("[data-rdsh-composer-root]");
+      if (composer !== null) {
+        root.style.setProperty("--rdsh-kb-composer", Math.round(composer.getBoundingClientRect().height) + "px");
+      }
       root.setAttribute("data-rdsh-kb-lift", "");
       root.style.setProperty("--rdsh-kb-lift", `${covered}px`);
       // Reserve the room only for a transcript that actually scrolls: a short
@@ -15352,12 +15358,17 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      against the app on every keyboard frame. It takes the transform for that,
      not "contain": containment stops body's background from reaching the
      canvas, which then paints black in the strip under the app. */
-  /* Keyboard up (#153): shorten the transcript's scroll area by the covered
-     height. The composer follows it in the same column, so it lands right above
-     the keyboard while the transcript keeps its own layout, and the newest rows
-     can still be scrolled into view. */
-  html[data-rdsh-kb-lift] [class*="scrollBody"] {
-    max-height: calc(100% - var(--rdsh-kb-lift, 0px)) !important;
+  /* Keyboard up (#154): the composer leaves the column and floats above the
+     keyboard, so the transcript keeps its whole layout and only the input
+     moves. The transcript reserves the lifted composer's height, which is
+     what lets the newest row be scrolled clear of it. */
+  html[data-rdsh-kb-lift] [data-rdsh-composer-root] {
+    position: fixed; left: 12px; right: 12px; bottom: 0;
+    transform: translateY(calc(-1 * var(--rdsh-kb-lift, 0px)));
+    z-index: 60;
+  }
+  html[data-rdsh-kb-lift] [data-rdsh-transcript] {
+    padding-bottom: calc(var(--rdsh-kb-lift, 0px) + var(--rdsh-kb-composer, 0px) + 16px) !important;
   }
   html[data-rdsh-keyboard],
   html[data-rdsh-keyboard] body {
