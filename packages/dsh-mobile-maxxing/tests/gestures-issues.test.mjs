@@ -993,6 +993,35 @@ test("#113 a left-edge swipe while a fullscreen panel is open closes the panel",
 	booted.disposeAll();
 });
 
+test("#113 a sheet narrower than the viewport still owns the left edge", () => {
+	// A 320px preview on a 390px phone is narrower than 85% of the viewport
+	// but still starts at the left edge. The width ratio called it "docked"
+	// and handed the left-edge swipe to the drawer, which opened the session
+	// list on top of the panel the user was reading.
+	const booted = bootGestures({ narrow: true, mode: "mobile", width: 390 });
+	const { root, collapse } = panelFixture(booted.doc, 320);
+	const innerQuery = booted.doc.querySelectorAll;
+	booted.doc.querySelectorAll = (selector) => (selector.includes("data-sidebar-right-open") ? [root] : innerQuery(selector));
+	booted.doc.querySelector = (selector) => (selector.includes("data-sidebar-right-open") ? root : null);
+	booted.drainFrames();
+	// The narrow sheet may not be the node the panel hook tags (it is under the
+	// 85% width the hook looks for), but the app's own open marker still says a
+	// panel owns the screen, and the left edge must not open the drawer on it.
+	assert.notEqual(booted.doc.querySelector("[data-sidebar-right-open]"), null, "the fixture is not open");
+
+	const start = booted.handler("touchstart", "onEdgeSwipeStart");
+	const move = booted.handler("touchmove", "onEdgeSwipeMove");
+	const touch = (x, y = 200) => ({ cancelable: true, prevented: 0, preventDefault() { this.prevented += 1; }, touches: [{ clientX: x, clientY: y }] });
+	const body = new FakeElement("div");
+	body._closest = () => null;
+
+	start({ touches: [{ clientX: 10, clientY: 200 }], target: body });
+	move(touch(150, 200));
+	assert.equal(collapse.clicks, 1, "a narrow sheet handed its left edge to the drawer");
+	assert.notEqual(booted.doc.documentElement.getAttribute("data-rdsh-drawer"), "open", "the drawer opened over the sheet");
+	booted.disposeAll();
+});
+
 /** A phone panel with dockkit's fullscreen control and its once-marker. */
 function promoteFixture(doc, { viewport = 390, fired = "1" } = {}) {
 	const root = new FakeElement("div");

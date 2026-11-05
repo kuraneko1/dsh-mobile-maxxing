@@ -10920,6 +10920,18 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /** How far from the left edge the OS Back gesture is claimed. */
     const EDGE_SUPPRESS_PX = 28;
 
+    /** Whether a right-panel layer is what the finger actually landed on. */
+    function panelOwnsPoint(x, y) {
+      try {
+        const under = typeof document.elementFromPoint === "function" ? document.elementFromPoint(x, y) : null;
+        if (!(under instanceof Element) || typeof under.closest !== "function") return false;
+        return under.closest(RIGHT_PANEL_ROOT) !== null
+          || under.closest("[data-sidebar-right-open], [data-rdsh-rightpanel]") !== null;
+      } catch {
+        return false;
+      }
+    }
+
     function onEdgeSwipeStart(event) {
       edgeSwipe = null;
       if (!phone() || event.touches.length !== 1) return;
@@ -10936,7 +10948,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const target = event.target;
       const fromRight = touch.clientX >= window.innerWidth - 36;
       const drawerOpen = document.documentElement.getAttribute("data-rdsh-drawer") === "open";
-      const panelOpen = document.documentElement.hasAttribute("data-rdsh-rightpanel-open");
+      // Read the panel state from the app's own marker as well: the tagged
+      // attribute lands with the next decorate pass, and a swipe in that gap
+      // used to open the drawer on top of a panel the user was looking at.
+      // The point under the finger is the last fallback: whatever the tags say,
+      // a panel layer that covers the left edge owns that edge.
+      const panelOpen = document.documentElement.hasAttribute("data-rdsh-rightpanel-open")
+        || document.querySelector("[data-sidebar-right-open]") !== null
+        || panelOwnsPoint(touch.clientX, touch.clientY);
       // While the preview is open, a rightward swipe anywhere on it goes back
       // to the chat, the way a pushed iOS screen does. This is checked before
       // the edge rules below, and it owns the left edge too: opening the
@@ -10951,18 +10970,22 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // #113: a fullscreen panel owns the whole screen, including the left
         // edge; a rightward swipe from there closes it. Only a docked panel
         // (landscape) leaves the left edge to the drawer (#59).
-        const isDocked = (() => {
-          const dock = rightPanelNode === null ? null : rightPanelNode.getBoundingClientRect();
-          return dock !== null && dock.width > 0 && dock.width < window.innerWidth * 0.85;
-        })();
-        const inLeftEdge = !fromRight && touch.clientX <= 36 && isDocked;
+        // A docked panel leaves the chat visible beside it, so the left edge
+        // still belongs to the drawer (#59). A sheet that merely happens to be
+        // narrower than the viewport is *not* docked: it starts at the left
+        // edge and owns it (#113). The panel's left offset, not a width ratio,
+        // is what tells the two apart -- a 320px preview on a 390px phone is
+        // narrower than 85% but still covers the whole edge, and the ratio test
+        // used to hand that swipe to the drawer.
+        const dockRect = rightPanelNode === null || rightPanelNode === undefined ? null : rightPanelNode.getBoundingClientRect();
+        const docked = dockRect !== null && dockRect.width > 0 && dockRect.left >= EDGE_SUPPRESS_PX;
+        const inLeftEdge = !fromRight && touch.clientX <= 36 && docked;
         if (!inLeftEdge) {
           // #59: a docked panel (landscape) shares the screen with the
           // conversation. Only a swipe that starts on the panel closes it; a
           // swipe on the chat keeps the chat's own gesture instead of reaching
           // across the split and collapsing the column under the finger.
-          const dock = rightPanelNode === null ? null : rightPanelNode.getBoundingClientRect();
-          if (!(dock !== null && dock.width > 0 && dock.width < window.innerWidth * 0.85 && touch.clientX < dock.left)) {
+          if (!(docked && touch.clientX < dockRect.left)) {
             edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight: false, closesPanel: true };
             return;
           }
