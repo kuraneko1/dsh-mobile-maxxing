@@ -3314,7 +3314,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // drawer slide out of sight. The drawer scrolls and focuses on its own;
       // the composer pin belongs to the chat screen only.
       const drawer = root.getAttribute("data-rdsh-drawer") === "open";
-      const open = phone() && !landscape && !drawer && viewport !== null && viewport !== undefined && document.querySelector('[role="dialog"]') === null && keyboardOpen();
+      // On 0.2.2 the app shell itself is a dialog, so 'any dialog open' would
+      // switch this off everywhere. Only a modal opened *over* the shell owns
+      // its own keyboard geometry (the directory picker, Settings).
+      const modal = document.querySelector('[role="dialog"] [role="dialog"]');
+      const open = phone() && !landscape && !drawer && viewport !== null && viewport !== undefined && modal === null && keyboardOpen();
       const drop = () => {
         if (root.hasAttribute("data-rdsh-kb-lift")) root.removeAttribute("data-rdsh-kb-lift");
         fitTop = -1;
