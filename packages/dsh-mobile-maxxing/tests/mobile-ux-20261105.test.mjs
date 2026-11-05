@@ -460,3 +460,13 @@ test("the conversation width applies before this plugin's hook exists", () => {
 	assert.match(phone, /\[data-slot="main.conversation"\],/, "the main slot too");
 	assert.match(phone, /\[data-slot="conversation"\] > \*/, "its children are sized the same way");
 });
+
+// --------------------------------------------------------------------------
+// #149: the OS edge-back gesture is cancelled on a phone
+// --------------------------------------------------------------------------
+
+test("the left-edge touch is cancelled so the OS cannot navigate", () => {
+	assert.match(CLIENT, /const EDGE_SUPPRESS_PX = 28;/, "the edge zone is declared");
+	assert.match(CLIENT, /first\.clientX <= EDGE_SUPPRESS_PX && event\.cancelable\) event\.preventDefault\(\)/, "the edge touch is cancelled");
+	assert.match(CLIENT, /addEventListener\("touchstart", onEdgeSwipeStart, \{ capture: true, passive: false \}\)/, "a passive listener cannot cancel");
+});

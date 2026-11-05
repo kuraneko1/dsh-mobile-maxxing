@@ -10810,10 +10810,20 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // gesture pulls the preview/right sidebar (the app's own "Open right
     // sidebar"). While the preview is open the left-to-right swipe closes it.
     let edgeSwipe = null;
+    /** How far from the left edge the OS Back gesture is claimed. */
+    const EDGE_SUPPRESS_PX = 28;
+
     function onEdgeSwipeStart(event) {
       edgeSwipe = null;
       if (!phone() || event.touches.length !== 1) return;
       const first = event.touches[0];
+      // iOS Safari and the installed PWA walk their history on a swipe that
+      // starts at the screen edge, which leaves the current screen (the
+      // "swiping right goes back" report). A page that cancels that touch
+      // keeps the gesture, so the drawer swipe below runs instead of a
+      // navigation. Every screen gets the same treatment: the listener is
+      // registered non-passive (see the boot block).
+      if (first.clientX <= EDGE_SUPPRESS_PX && event.cancelable) event.preventDefault();
       if (document.querySelector("[data-rdsh-lightbox], [data-rdsh-crop-overlay], [data-shortcut-modal=settings]") !== null) return;
       const touch = event.touches[0];
       const target = event.target;
@@ -16651,7 +16661,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         document.addEventListener("dragend", onDragEndCapture, true);
         document.addEventListener("dblclick", onSessionTitleDoubleClick, true);
         document.addEventListener("contextmenu", onSessionContextMenu, true);
-        document.addEventListener("touchstart", onEdgeSwipeStart, true);
+        document.addEventListener("touchstart", onEdgeSwipeStart, { capture: true, passive: false });
         document.addEventListener("touchmove", onEdgeSwipeMove, { capture: true, passive: false });
         document.addEventListener("touchend", onEdgeSwipeEnd, true);
         document.addEventListener("touchcancel", onEdgeSwipeEnd, true);
