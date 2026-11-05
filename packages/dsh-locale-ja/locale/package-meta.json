@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "dsh-locale-ja",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Optional Japanese locale package for DSH: the sole ja language and namespace owner on DSH versions that do not ship ja themselves, released only when every key has a reviewed Japanese entry and no value falls back to English.",
   "license": "MIT",

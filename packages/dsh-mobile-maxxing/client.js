@@ -3285,7 +3285,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // Dialogs and landscape composers own their scroll and focus geometry;
       // pinning them to the keyboard-shrunk viewport hides the input itself.
       const landscape = window.innerWidth > window.innerHeight;
-      const open = phone() && !landscape && viewport !== null && viewport !== undefined && document.querySelector('[role="dialog"]') === null && keyboardOpen();
+      // #142: the drawer is a full-height overlay inside body. Pinning body to
+      // the keyboard band clips it, so opening the session search made the
+      // drawer slide out of sight. The drawer scrolls and focuses on its own;
+      // the composer pin belongs to the chat screen only.
+      const drawer = root.getAttribute("data-rdsh-drawer") === "open";
+      const open = phone() && !landscape && !drawer && viewport !== null && viewport !== undefined && document.querySelector('[role="dialog"]') === null && keyboardOpen();
       root.toggleAttribute("data-rdsh-keyboard", open);
       if (!open) return;
       root.style.setProperty("--rdsh-vv-top", `${Math.max(0, Math.round(viewport.offsetTop))}px`);
@@ -5334,6 +5339,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     const UNTITLED = probeRegex("untitled", "i", ["new session", "new chat", "untitled"], true);
     /** Last title seen per target, so only the first naming animates. */
     const titleSeen = new Map();
+    /**
+     * Targets whose first real title of this page load is recorded (#144).
+     *
+     * A cold start paints a row with its raw id (or nothing) before the
+     * catalog resolves. That placeholder-to-title transition is a baseline,
+     * not a naming event, so it must not type.
+     */
+    const titleReady = new Set();
     /** How many passes each target has played; a session is named twice. */
     const titlePasses = new Map();
     /** Passes allowed per session: the initial label, then the model's name. */
@@ -5733,27 +5746,42 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         else if (previous === undefined) titleSeen.set(key, "");
         if (text === "") continue;
         // First sight is the baseline: a page reload must not retype history.
-        if (previous === undefined || previous === text) continue;
+        // A real title here also proves the row is named, so a later change to
+        // it is a rename. An id or an untitled label is a placeholder: the real
+        // title that follows is still a baseline (see the branch below).
+        if (previous === undefined) {
+          if (!untitled(text) && text !== id) titleReady.add(key);
+          continue;
+        }
+        if (previous === text) continue;
         const passes = titlePasses.get(key) ?? 0;
         if (passes >= TITLE_PASSES) continue;
-        // An unnamed session shows the working directory or its raw id in the
-        // header, so "untitled" alone misses the case this animation is for.
-        // A name is generated while the session works (or right after), and a
-        // manual rename later does not qualify.
-        const generated = working
-          || untitled(previous)
-          || previous === id
-          || now - (titleWorkingAt.get(key) ?? 0) < NAME_GRACE_MS;
-        // The first pass is the initial label. The second is the name the model
-        // settles on, which arrives on its own schedule, so it is allowed
-        // without the running window and erases the label first.
-        if (passes === 0 && !generated) continue;
+        // #144: the first real title of this page load is a baseline, not a
+        // naming event. A cold PWA start paints a row with its raw id (or
+        // nothing) before the catalog resolves; treating that as "untitled ->
+        // named" typed every existing session at once on the phone.
+        if (!titleReady.has(key)) {
+          titleReady.add(key);
+          const named = working
+            || now - (titleWorkingAt.get(key) ?? 0) < NAME_GRACE_MS
+            // Only a session that was seen working can have been unnamed at
+            // its first sight; a boot row was never in the running set.
+            || (untitled(previous) && titleWorkingAt.has(key));
+          if (!named) continue;
+        }
+        // After the baseline, a change is either the name the model settled on
+        // (the row's first label is replaced) or a rename; both type once.
+        // TITLE_PASSES caps the passes so a stream of re-renders cannot loop.
         titlePasses.set(key, passes + 1);
         // Why the running animation is cancelled rather than awaited: waiting
         // would reveal the new name the moment the layer is removed, and only
         // then start erasing it — a pop followed by a pointless animation.
         const active = titleAnimations.get(key);
-        const eraseFrom = active === undefined ? (passes === 0 ? "" : previous) : active.visible();
+        // Erase whatever is on screen first: a rename clears the old name, and
+        // a session's generated name clears its "New session" label. Only the
+        // very first paint had nothing to erase, and that paint is a baseline
+        // now, so it never reaches this line.
+        const eraseFrom = active === undefined ? previous : active.visible();
         active?.cancel();
         const controller = animateSessionTitle(element, text, eraseFrom);
         if (controller === null) titleAnimations.delete(key);
@@ -7361,6 +7389,44 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       document.documentElement.toggleAttribute("data-rdsh-has-dock", hasDock);
     }
 
+    /**
+     * The phone's 44px tap targets (#135).
+     *
+     * Upstream draws the chrome's icon buttons at 24-28px and every class name
+     * carries a build hash ("hHd-Xa_iconButton", "_addTab_<hash>_<n>"), so a
+     * stylesheet cannot name them. A button between 24 and 32px inside the
+     * header, the drawer or the right panel is tagged while the mobile surface
+     * is active; the phone sheet turns the tag into a 44x44 overlay that takes
+     * no layout space. A desktop never tags anything.
+     *
+     * A re-render that replaces the button loses the tag, so every pass claims
+     * the buttons again; the tag leaves with its element.
+     */
+    const TAP_TARGET_ROOTS = "[data-rdsh-header], [data-sidebar-right-panel], [data-rdsh-sidebar], header, [class*='_tabStrip']";
+    const TAP_TARGET_CANDIDATES = `${TAP_TARGET_ROOTS} button, [data-sidebar-right-expand]`;
+    /** Menus, dialogs and session rows keep their own geometry. */
+    const TAP_TARGET_EXCLUDE = '[role="menu"], [role="dialog"], [data-shortcut-modal], [data-row-key^="session:"]';
+
+    function decorateTapTargets() {
+      if (!phone()) {
+        for (const tagged of document.querySelectorAll("[data-rdsh-hit44]")) tagged.removeAttribute("data-rdsh-hit44");
+        return;
+      }
+      for (const button of document.querySelectorAll(TAP_TARGET_CANDIDATES)) {
+        if (button.hasAttribute("data-rdsh-hit44")) continue;
+        if (button.closest(TAP_TARGET_EXCLUDE) !== null) continue;
+        // An icon button: labelled for assistive tech, or nothing but its icon.
+        const labelled = String(button.getAttribute("aria-label") || "").trim() !== "";
+        const iconOnly = String(button.textContent || "").trim() === "";
+        if (!labelled && !iconOnly) continue;
+        const rect = button.getBoundingClientRect();
+        // 24-32px: the chrome's icon buttons. A smaller control (a tab's 20px
+        // close affordance) would have its overlay swallow the tab it sits on.
+        if (!(rect.width >= 24 && rect.height >= 24 && rect.width <= 32 && rect.height <= 32)) continue;
+        button.setAttribute("data-rdsh-hit44", "");
+      }
+    }
+
     function markScrollers() {
       if (!phone()) {
         clearOwnedAttribute("data-rdsh-scroll");
@@ -7394,6 +7460,56 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return document.querySelector(ariaLabelSelector("nav", "sessionHierarchy", "Session hierarchy"));
     }
 
+    /**
+     * A full-screen surface that owns the screen instead of the frame (#134).
+     *
+     * Settings renders over the app with `data-shortcut-modal="settings"`; the
+     * drawer it was opened from is not reachable while it shows, and a route
+     * that replaces the frame is the same case (`frame()` returns null).
+     *
+     * @returns {boolean} whether such a surface is on screen.
+     */
+    function fullscreenSurfaceShown() {
+      const settings = document.querySelector('[data-shortcut-modal="settings"]');
+      return settings !== null && routeLaidOut(settings);
+    }
+
+    /** The closed marker `closeDrawer()` records when there is nothing to click. */
+    function markDrawerClosed() {
+      document.documentElement.setAttribute("data-rdsh-drawer", "closed");
+      if (state.drawerOpen) emit({ drawerOpen: false });
+    }
+
+    /**
+     * Write this pass's drawer marker (#134).
+     *
+     * The attribute used to be written only while a frame was mounted, so a
+     * full-screen route left `open` behind it: Escape closed Settings and the
+     * FAB and the backdrop stayed on the open styling. This records the same
+     * closed state `closeDrawer()` records when there is no frame to click,
+     * and keeps it closed until the drawer is asked for again.
+     *
+     * @param {Element|null} root - the app frame, when one is mounted.
+     */
+    function syncDrawerMarker(root) {
+      if (!phone()) return;
+      const route = fullscreenSurfaceShown();
+      if (route) drawerRouteClosed = true;
+      // The frame's own state settles the latch: a drawer that really is
+      // collapsed (or absent) has nothing left to hide.
+      if (root === null || root.hasAttribute("data-sidebar-collapsed")) drawerRouteClosed = false;
+      const open = root !== null && !route && !drawerRouteClosed && !root.hasAttribute("data-sidebar-collapsed");
+      if (!open) {
+        markDrawerClosed();
+        return;
+      }
+      if (!state.drawerOpen) emit({ drawerOpen: true });
+      document.documentElement.setAttribute("data-rdsh-drawer", "open");
+    }
+
+    /** A full-screen route closed the drawer marker; an explicit open ends it. */
+    let drawerRouteClosed = false;
+
     function decorateFast() {
       fitVisualViewport();
       // One mode decision per pass. Every tag below belongs to the mobile
@@ -7415,15 +7531,18 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           }
           const sidebar = document.querySelector('[data-slot="sidebar"]');
           if (sidebar && sidebar.parentElement) sidebar.parentElement.setAttribute("data-rdsh-sidebar", "");
-          const open = !root.hasAttribute("data-sidebar-collapsed");
-          if (open !== state.drawerOpen) emit({ drawerOpen: open });
-          document.documentElement.setAttribute("data-rdsh-drawer", open ? "open" : "closed");
         } else {
           for (const attribute of ["data-rdsh-frame", "data-rdsh-center-col", "data-rdsh-rightbar-col", "data-rdsh-sidebar", "data-rdsh-drawer"]) {
             clearOwnedAttribute(attribute);
           }
         }
       }
+      // #134: written outside the frame branch, because a route that replaces
+      // the frame is exactly when the marker went stale.
+      syncDrawerMarker(root);
+      // #131: the chat's own session is what a reload restores; the composer
+      // slot is not always mounted, so this pass is the reliable writer.
+      if (onPhone) syncLastSession();
       const header = document.querySelector("header[data-window-drag]");
       if (header !== null) {
         if (onPhone) header.setAttribute("data-rdsh-header", "");
@@ -7452,6 +7571,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       decorateTodoPanel();
       decorateGoalBar();
       decorateHeaderTitle();
+      decorateTapTargets();
       decorateSessionTitleTyping();
       decorateToasts();
       decorateModelSearch();
@@ -7472,6 +7592,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // writes the colour frame and every other row hook only in the phone
       // layout (#44); on a desktop it clears leftovers from a narrower pass.
       decorateSessionRows();
+      decorateSessionLimit();
       decorateRouteHeading();
       decorateRouteBack();
       decorateQueueDock();
@@ -7609,7 +7730,72 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }, 0);
     }
 
+    // ---------------------------------------------------------------------
+    // Session list: one page at a time (#143)
+    // ---------------------------------------------------------------------
+    /**
+     * Rows the drawer renders before "Show more sessions".
+     *
+     * Upstream paints the whole catalog, so a phone with hundreds of sessions
+     * spends its first frame on titles the user never asked for. The deco-
+     * ration pass only tags the rows past the page (and the markup itself is
+     * untouched), so scrolling, search and every row action keep working; the
+     * button below the list raises the limit by one page.
+     */
+    const SESSION_PAGE_SIZE = 20;
+    let sessionLimit = SESSION_PAGE_SIZE;
+    let sessionLimitOpen = false;
+
+    /** Forget the page tags and the button (desktop, or no drawer). */
+    function clearSessionLimit() {
+      for (const row of document.querySelectorAll("[data-rdsh-session-overflow]")) row.removeAttribute("data-rdsh-session-overflow");
+      document.querySelector("[data-rdsh-session-more]")?.remove();
+    }
+
+    function decorateSessionLimit() {
+      const sidebar = document.querySelector("[data-rdsh-sidebar]");
+      if (!phone() || sidebar === null) {
+        clearSessionLimit();
+        return;
+      }
+      const open = document.documentElement.getAttribute("data-rdsh-drawer") === "open";
+      // A drawer the user opens again starts from the first page.
+      if (open && !sessionLimitOpen) sessionLimit = SESSION_PAGE_SIZE;
+      sessionLimitOpen = open;
+      // The search result set is upstream's own (bounded) list, not the
+      // catalog: limiting it would hide matches the user is looking for.
+      const search = sidebar.querySelector("input");
+      const paged = search === null || (search.value || "") === "";
+      const rows = [...sidebar.querySelectorAll('[data-row-key^="session:"]')];
+      rows.forEach((row, index) => {
+        if (paged && index >= sessionLimit) row.setAttribute("data-rdsh-session-overflow", "");
+        else row.removeAttribute("data-rdsh-session-overflow");
+      });
+      const hidden = paged ? Math.max(0, rows.length - sessionLimit) : 0;
+      let more = sidebar.querySelector("[data-rdsh-session-more]");
+      if (hidden === 0) {
+        more?.remove();
+        return;
+      }
+      if (more === null) {
+        const scroller = sessionListScroller();
+        if (scroller === null) return;
+        more = document.createElement("button");
+        more.type = "button";
+        more.className = "rdsh-mux-session-more";
+        more.setAttribute("data-rdsh-session-more", "");
+        more.addEventListener("click", () => {
+          sessionLimit += SESSION_PAGE_SIZE;
+          scheduleDecorate();
+        });
+        scroller.append(more);
+      }
+      const label = t("mux.sessions.more");
+      if (more.textContent !== label) more.textContent = label;
+    }
+
     function toggleDrawer() {
+      drawerRouteClosed = false;
       // Share the decorator's locator so a localised label still opens the
       // drawer; the stock global label is only the fallback for a route with
       // no sidebar slot.
@@ -7624,8 +7810,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // A full-screen route may not render the app frame at all. Reflect the
         // closed state instead of leaving `data-rdsh-drawer="open"` behind for
         // the next route (the FAB keys off this attribute).
-        document.documentElement.setAttribute("data-rdsh-drawer", "closed");
-        if (state.drawerOpen) emit({ drawerOpen: false });
+        markDrawerClosed();
         scheduleDecorate();
         return;
       }
@@ -7639,8 +7824,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         } else {
           // Route content replaced the sidebar chrome: there is nothing to
           // click, so record the state the next decorate pass should show.
-          document.documentElement.setAttribute("data-rdsh-drawer", "closed");
-          if (state.drawerOpen) emit({ drawerOpen: false });
+          markDrawerClosed();
         }
       }
       scheduleDecorate();
@@ -9201,6 +9385,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       document.addEventListener("scroll", onFilesScroll, true);
       document.addEventListener("contextmenu", onFilesContextMenu, true);
       window.addEventListener("pagehide", onWorkspacePageHide);
+      installPresentedTools();
     }
 
     function onWorkspacePageHide(event) {
@@ -9221,11 +9406,641 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         document.removeEventListener("contextmenu", onFilesContextMenu, true);
         window.removeEventListener("pagehide", onWorkspacePageHide);
       }
+      disposePresentedTools();
       stopWorkspacePickerWatch();
       clearWorkspacePicker();
       teardownWorkspaceFiles();
     }
 
+
+
+    // ---------------------------------------------------------------------
+    // Presented (deliverable) files in the transcript: long-press menu with
+    // a real download.
+    //
+    // Upstream renders a delivered file as [data-presented-file]: a preview
+    // <button> whose title is the file's absolute path, plus an actions slot
+    // ([data-slot="deliverables.file.actions"]). It is a button, not a link,
+    // so a phone browser or WebView offers no native long-press download for
+    // it and a tap only opens the sidebar preview. This menu keeps that tap
+    // intact and adds Download / Share / Preview / Copy path behind a long
+    // press on the rest of the card.
+    //
+    // Bytes come from the session's own workspace-files API
+    // (workspaceFiles/readBytes in chunks), the same authority the preview
+    // reads through, so this adds no new host endpoint and cannot read a
+    // file the preview could not.
+    // ---------------------------------------------------------------------
+    const PRESENTED_CHUNK_BYTES = 262144;
+    // A delivered file is assembled in memory, so refuse anything huge
+    // instead of trying to hold it: 64 MiB is far past documents, images
+    // and the zips this card normally delivers.
+    const PRESENTED_MAX_BYTES = 67108864;
+    const PRESENTED_MAX_CHUNKS = Math.ceil(PRESENTED_MAX_BYTES / PRESENTED_CHUNK_BYTES) + 1;
+    const PRESENTED_CANCEL_MIN_MS = 400;
+    // The DSH remote service, when the host injected it. Reading through it
+    // (instead of a bare fetch) uses the same connection/transport the rest
+    // of DSH Web uses, which is what reaches the host inside app WebViews.
+    let presentedRemote = null;
+    // A finger resting on a phone drifts further than a mouse-era slop, and
+    // the transcript scrolls under it while a turn streams: a scroll event
+    // must not cancel the press (a real scroll drag still moves the pointer
+    // past the slop and cancels there).
+    const PRESENTED_PRESS_SLOP_PX = 24;
+    let presentedPress = null;
+    let presentedMenu = null;
+    let presentedClickGuard = null;
+    let presentedToolsInstalled = false;
+
+    // A share sheet only opens while the tap's user activation is still live,
+    // and iOS drops that activation as soon as the handler awaits a network
+    // read. The bytes are therefore fetched while the menu is open, so the
+    // tap itself can call navigator.share() without awaiting anything (#138).
+    const presentedPrefetch = new Map();
+
+    /** What a presented card points at, from upstream's stable hooks only. */
+    function presentedInfo(card) {
+      const preview = card.querySelector("button[title]");
+      const path = String(preview?.getAttribute?.("title") ?? preview?.title ?? "").trim();
+      const scope = card.closest("[data-conversation-session]");
+      const sessionId = String(scope?.getAttribute?.("data-conversation-session") ?? "").trim();
+      return { preview, path, name: filesBaseName(path), sessionId };
+    }
+
+    /** The session a transcript element belongs to, or "" when unknown. */
+    function presentedSessionId(element) {
+      const scope = element?.closest?.("[data-conversation-session]");
+      return String(scope?.getAttribute?.("data-conversation-session") ?? "").trim();
+    }
+
+    /** An absolute path from a button title, or "" when it is not one. */
+    function presentedAbsolutePath(value) {
+      const path = String(value ?? "").replace(/\\/g, "/").trim();
+      return path.startsWith("/") || /^[A-Za-z]:\//.test(path) ? path : "";
+    }
+
+    /** A path-shaped button label (tool file links), or "" when not one. */
+    function presentedLinkedPath(text) {
+      const path = String(text ?? "").trim();
+      if (path === "" || path.length > 300 || /\s/.test(path)) return "";
+      if (!path.includes("/") || /^https?:\/\//i.test(path)) return "";
+      const last = path.split("/").pop() ?? "";
+      return /^[^/]+\.[A-Za-z0-9]{1,12}$/.test(last) ? path : "";
+    }
+
+    /**
+     * What a long press would act on: a presented card, a file mention in
+     * the message text (a button whose title is the absolute path), or a
+     * tool call's file link (a path-shaped button inside a tool row). All
+     * three open the same file upstream, so all three get the same menu.
+     */
+    function presentedCardAt(target) {
+      if (!phone()) return null;
+      if (target === null || target === undefined || target.closest === undefined) return null;
+      // The card's own action buttons keep their upstream menus.
+      if (target.closest('[data-slot="deliverables.file.actions"]') !== null) return null;
+      const card = target.closest("[data-presented-file]");
+      if (card !== null) {
+        const info = presentedInfo(card);
+        if (info.path === "") return null;
+        return { ...info, card, anchor: info.preview ?? card };
+      }
+      const titled = target.closest("button[title]");
+      if (titled !== null) {
+        const path = presentedAbsolutePath(titled.getAttribute("title") ?? titled.title);
+        if (path !== "") {
+          return { preview: titled, path, name: filesBaseName(path), sessionId: presentedSessionId(titled), card: titled, anchor: titled };
+        }
+      }
+      const button = target.closest("button");
+      if (button !== null && button.closest("[data-tool]") !== null) {
+        const path = presentedLinkedPath(button.textContent);
+        if (path !== "") {
+          return { preview: button, path, name: filesBaseName(path), sessionId: presentedSessionId(button), card: button, anchor: button };
+        }
+      }
+      return null;
+    }
+
+    function presentedMimeType(name) {
+      const ext = String(name ?? "").toLowerCase().split(".").pop() ?? "";
+      return {
+        txt: "text/plain", log: "text/plain", md: "text/markdown", json: "application/json",
+        csv: "text/csv", html: "text/html", png: "image/png", jpg: "image/jpeg",
+        jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
+        pdf: "application/pdf", zip: "application/zip", mp4: "video/mp4", mp3: "audio/mpeg",
+      }[ext] ?? "application/octet-stream";
+    }
+
+    /** Can this browser hand files to the OS share sheet at all? */
+    function presentedCanShareFiles(info) {
+      try {
+        if (typeof File !== "function") return false;
+        if (typeof navigator !== "object" || navigator === null) return false;
+        if (typeof navigator.share !== "function" || typeof navigator.canShare !== "function") return false;
+        return navigator.canShare({ files: [new File([], info.name, { type: presentedMimeType(info.name) })] });
+      } catch {
+        return false;
+      }
+    }
+
+    /**
+     * One chunk of the file, through the injected DSH remote when there is
+     * one (the connection the rest of DSH Web uses, including inside app
+     * WebViews) and through the gateway HTTP route otherwise. Both speak to
+     * the session's own workspace-files API, the same authority the preview
+     * reads through, so this adds no new host endpoint.
+     */
+    async function presentedReadChunk(info, offset) {
+      const remote = presentedRemote;
+      // The remote service is a lazily-injected cordis proxy: touching a
+      // property before the injection throws ("cannot get property ... without
+      // inject"). Reading it inside the try keeps that refusal a fall-through
+      // to the HTTP route instead of a failed download.
+      if (remote !== null && remote !== undefined) {
+        try {
+          const files = remote.workspaceFiles;
+          if (files !== undefined && typeof files.readBytes === "function") {
+            const result = await files.readBytes(info.sessionId, info.path, {
+              range: { offset, length: PRESENTED_CHUNK_BYTES },
+            });
+            if (result === null || result === undefined || result.ok !== true) {
+              throw new Error(result?.error?.message ?? "read failed");
+            }
+            const value = result.value ?? {};
+            const data = value.data;
+            let chunk = null;
+            if (data instanceof Uint8Array) chunk = data;
+            else if (data instanceof ArrayBuffer) chunk = new Uint8Array(data);
+            else if (Array.isArray(data)) chunk = new Uint8Array(data);
+            else if (typeof data === "string") chunk = Uint8Array.from(atob(data), (ch) => ch.charCodeAt(0));
+            return { value, chunk };
+          }
+        } catch (error) {
+          // The remote transport can refuse a read the plain HTTP route
+          // completes (the iOS PWA's connection, for one). Fall through to
+          // fetch instead of failing the download or share outright.
+          console.warn("[rdsh-mobile-ux] presented read via remote failed", error);
+        }
+      }
+      if (typeof fetch !== "function") throw new Error("download is unavailable");
+      const rpcId = globalThis.crypto?.randomUUID?.()
+        ?? `rdsh-presented-${Date.now()}-${offset}`;
+      const response = await fetch("/api/workspaceFiles/readBytes", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          type: "client-request",
+          rpcId,
+          method: "workspaceFiles/readBytes",
+          payload: {
+            args: {
+              workspaceFileScopeId: info.sessionId,
+              path: info.path,
+              options: { range: { offset, length: PRESENTED_CHUNK_BYTES } },
+            },
+          },
+        }),
+      });
+      if (!response.ok) throw new Error(`read failed: ${response.status}`);
+      let meta;
+      let chunk = null;
+      const contentType = response.headers?.get?.("content-type") ?? "";
+      if (contentType.includes("multipart/form-data") && typeof response.formData === "function") {
+        const form = await response.formData();
+        const raw = form.get("metadata");
+        meta = typeof raw === "string" ? JSON.parse(raw) : null;
+        const partName = meta?.attachments?.[0]?.part ?? "bytes-0";
+        const part = form.get(partName);
+        if (part === null || part === undefined) throw new Error("read failed: missing bytes");
+        chunk = typeof part === "string" ? new TextEncoder().encode(part) : await part.arrayBuffer();
+      } else {
+        meta = await response.json();
+        const data = meta?.result?.value?.data;
+        if (typeof data === "string") chunk = Uint8Array.from(atob(data), (ch) => ch.charCodeAt(0));
+        else if (data instanceof Uint8Array) chunk = data;
+        else if (Array.isArray(data)) chunk = new Uint8Array(data);
+      }
+      const result = meta?.result;
+      if (result === null || result === undefined || result.ok !== true) {
+        throw new Error(result?.error?.message ?? "read failed");
+      }
+      return { value: result.value ?? {}, chunk };
+    }
+
+    /** Read the whole file through the session's workspace-files API. */
+    async function presentedFileBlob(info) {
+      if (typeof Blob !== "function") throw new Error("download is unavailable");
+      const chunks = [];
+      let offset = 0;
+      let total = null;
+      for (let index = 0; index < PRESENTED_MAX_CHUNKS; index += 1) {
+        const { value, chunk } = await presentedReadChunk(info, offset);
+        if (typeof value.bytes === "number") total = value.bytes;
+        if (total !== null && total > PRESENTED_MAX_BYTES) throw new Error("read failed: file is too large");
+        const size = chunk?.byteLength ?? chunk?.length ?? 0;
+        if (size > 0) chunks.push(chunk);
+        offset += size;
+        if (offset > PRESENTED_MAX_BYTES) throw new Error("read failed: file is too large");
+        if (value.eof === true) break;
+        if (size === 0) throw new Error("read failed: empty chunk");
+        if (total !== null && offset >= total) break;
+        if (index === PRESENTED_MAX_CHUNKS - 1) throw new Error("read failed: file is too large");
+      }
+      return new Blob(chunks, { type: presentedMimeType(info.name) });
+    }
+
+    /** Hand a downloaded blob to the browser under the file's own name. */
+    function presentedSaveBlob(blob, name) {
+      const urlApi = globalThis.URL;
+      if (urlApi === undefined || typeof urlApi.createObjectURL !== "function") throw new Error("download is unavailable");
+      const url = urlApi.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = name;
+      anchor.rel = "noopener";
+      document.body.append(anchor);
+      anchor.click?.();
+      anchor.remove();
+      setTimeout(() => urlApi.revokeObjectURL?.(url), 60000);
+    }
+
+    /** The host's streamed download for this file (see lib/mobile-ux.js). */
+    function presentedDownloadUrl(info) {
+      return `/api/rdsh-mobile-ux/download?sessionId=${encodeURIComponent(info.sessionId)}&path=${encodeURIComponent(info.path)}`;
+    }
+
+    /**
+     * Download through the host route: a real HTTP download in the same
+     * tap, so the browser's own download handling (and its user-gesture
+     * rules) applies instead of a blob created after an async read.
+     */
+    function presentedDownloadViaEndpoint(info, quiet = false) {
+      const anchor = document.createElement("a");
+      anchor.href = presentedDownloadUrl(info);
+      anchor.download = info.name;
+      anchor.rel = "noopener";
+      document.body.append(anchor);
+      anchor.click?.();
+      anchor.remove();
+      if (!quiet) notify(t("presented.downloadStarted"));
+    }
+
+    /** One menu's prefetched bytes, keyed by the card it belongs to. */
+    function presentedPrefetchKey(info) {
+      return `${info.sessionId}\u0000${info.path}`;
+    }
+
+    /** Start reading a card's bytes while its menu is on screen. */
+    function startPresentedPrefetch(info) {
+      if (!presentedCanShareFiles(info)) return;
+      // Only the card whose menu is open keeps bytes; an older entry is gone.
+      for (const key of presentedPrefetch.keys()) {
+        if (key !== presentedPrefetchKey(info)) presentedPrefetch.delete(key);
+      }
+      const key = presentedPrefetchKey(info);
+      if (presentedPrefetch.has(key)) return;
+      const entry = { blob: null };
+      presentedPrefetch.set(key, entry);
+      presentedFileBlob(info).then((blob) => {
+        entry.blob = blob;
+      }, () => {
+        presentedPrefetch.delete(key);
+      });
+    }
+
+    /** The bytes this tap may use, if the prefetch already finished. */
+    function takePresentedPrefetch(info) {
+      const key = presentedPrefetchKey(info);
+      const entry = presentedPrefetch.get(key) ?? null;
+      presentedPrefetch.delete(key);
+      return entry;
+    }
+
+    /**
+     * Share from a tap that still owns its user activation.
+     *
+     * With the bytes in hand the sheet opens without an await in between; a
+     * slow read falls back to the shared path below, and a refused sheet
+     * leaves the host download so the file is never lost.
+     */
+    async function sharePresentedFile(info) {
+      const entry = takePresentedPrefetch(info);
+      if (entry === null || entry.blob === null) {
+        await downloadPresentedFile(info, true);
+        return;
+      }
+      try {
+        await navigator.share({ files: [new File([entry.blob], info.name, { type: entry.blob.type })] });
+        return;
+      } catch (error) {
+        if (error?.name === "AbortError") return;
+        console.warn("[rdsh-mobile-ux] presented share failed", error);
+      }
+      try {
+        if (info.sessionId !== "") {
+          presentedDownloadViaEndpoint(info, true);
+          notify(t("presented.shareFailed"));
+        } else {
+          presentedSaveBlob(entry.blob, info.name);
+          notify(t("presented.downloadStarted"));
+        }
+      } catch {
+        notify(t("presented.downloadFailed"));
+      }
+    }
+
+    async function downloadPresentedFile(info, share = false) {
+      // A plain download needs no bytes in hand: let the host stream it.
+      if (!share && info.sessionId !== "") {
+        presentedDownloadViaEndpoint(info);
+        return;
+      }
+      let blob = null;
+      try {
+        blob = await presentedFileBlob(info);
+      } catch (error) {
+        // Share has a second route (the host's own download) and keeps going;
+        // a plain download has none.
+        console.warn("[rdsh-mobile-ux] presented read failed", error);
+        if (!share) {
+          notify(t("presented.downloadFailed"));
+          return;
+        }
+      }
+      if (share) {
+        if (blob !== null && presentedCanShareFiles(info) && typeof File === "function") {
+          try {
+            await navigator.share({ files: [new File([blob], info.name, { type: blob.type })] });
+            return;
+          } catch (error) {
+            // Closing the share sheet is the user's choice, not a failure.
+            // Anything else (lost user activation on a slow read, an OS
+            // refusal) falls back to the host's download below.
+            if (error?.name === "AbortError") return;
+            console.warn("[rdsh-mobile-ux] presented share failed", error);
+          }
+        }
+        try {
+          if (info.sessionId !== "") {
+            presentedDownloadViaEndpoint(info, true);
+            notify(t("presented.shareFailed"));
+          } else if (blob !== null) {
+            presentedSaveBlob(blob, info.name);
+            notify(t("presented.downloadStarted"));
+          } else {
+            notify(t("presented.downloadFailed"));
+          }
+        } catch {
+          notify(t("presented.downloadFailed"));
+        }
+        return;
+      }
+      try {
+        if (info.sessionId !== "") presentedDownloadViaEndpoint(info);
+        else {
+          presentedSaveBlob(blob, info.name);
+          notify(t("presented.downloadStarted"));
+        }
+      } catch {
+        notify(t("presented.downloadFailed"));
+      }
+    }
+
+    function cancelPresentedPress() {
+      if (presentedPress === null) return;
+      if (presentedPress.timer !== 0) clearTimeout(presentedPress.timer);
+      presentedPress = null;
+    }
+
+    function presentedSamePointer(event) {
+      if (presentedPress === null) return false;
+      if (presentedPress.pointerId === null) return true;
+      return typeof event.pointerId !== "number" || event.pointerId === presentedPress.pointerId;
+    }
+
+    function onPresentedPointerDown(event) {
+      if (!phone() || event.pointerType === "mouse" || event.isPrimary === false) return;
+      if (presentedMenu !== null && presentedMenu.node.contains(event.target)) return;
+      if (presentedPress !== null && !presentedSamePointer(event)) return;
+      if (presentedMenu !== null) closePresentedMenu();
+      const hit = presentedCardAt(event.target);
+      if (hit === null) return;
+      cancelPresentedPress();
+      presentedPress = {
+        ...hit,
+        x: typeof event.clientX === "number" ? event.clientX : 0,
+        y: typeof event.clientY === "number" ? event.clientY : 0,
+        pointerId: typeof event.pointerId === "number" ? event.pointerId : null,
+        since: Date.now(),
+        timer: 0,
+      };
+      presentedPress.timer = setTimeout(() => {
+        if (presentedPress === null) return;
+        const press = presentedPress;
+        presentedPress = null;
+        openPresentedMenu(press);
+        armPresentedClickGuard(press.card);
+      }, FILES_PRESS_MS);
+    }
+
+    function onPresentedPointerMove(event) {
+      if (!presentedSamePointer(event) || event.isPrimary === false) return;
+      const dx = (typeof event.clientX === "number" ? event.clientX : 0) - presentedPress.x;
+      const dy = (typeof event.clientY === "number" ? event.clientY : 0) - presentedPress.y;
+      if (Math.hypot(dx, dy) > PRESENTED_PRESS_SLOP_PX) cancelPresentedPress();
+    }
+
+    function onPresentedPointerUp(event) {
+      if (!presentedSamePointer(event)) return;
+      cancelPresentedPress();
+    }
+
+    function onPresentedPointerCancel(event) {
+      if (!presentedSamePointer(event)) return;
+      const press = presentedPress;
+      cancelPresentedPress();
+      // Android often ends a stationary long press with pointercancel when
+      // the browser takes the gesture over (just before its contextmenu).
+      // A cancel that arrives after most of the press has already elapsed
+      // is that takeover, not a scroll: treat it as the completed press.
+      if (press !== null && Date.now() - press.since >= PRESENTED_CANCEL_MIN_MS) {
+        openPresentedMenu(press);
+        armPresentedClickGuard(press.card);
+      }
+    }
+
+    function onPresentedContextMenu(event) {
+      if (!phone()) return;
+      const target = event.target;
+      if (target === null || target === undefined || target.closest === undefined) return;
+      if (presentedMenu !== null && presentedMenu.node.contains(target)) {
+        event.preventDefault();
+        return;
+      }
+      const hit = presentedCardAt(target);
+      if (hit === null) return;
+      event.preventDefault();
+      if (typeof event.stopPropagation === "function") event.stopPropagation();
+      cancelPresentedPress();
+      if (presentedMenu !== null && presentedMenu.anchor === hit.anchor) return;
+      closePresentedMenu();
+      openPresentedMenu(hit);
+    }
+
+    /** The click that ends a long press must not also open the preview. */
+    function onPresentedCardClickGuard(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      clearPresentedClickGuard();
+    }
+
+    function clearPresentedClickGuard() {
+      const guard = presentedClickGuard;
+      presentedClickGuard = null;
+      if (guard === null) return;
+      if (guard.timer !== 0) clearTimeout(guard.timer);
+      guard.card.removeEventListener("click", onPresentedCardClickGuard, true);
+    }
+
+    function armPresentedClickGuard(card) {
+      clearPresentedClickGuard();
+      const guard = { card, timer: 0 };
+      presentedClickGuard = guard;
+      guard.timer = setTimeout(clearPresentedClickGuard, 900);
+      card.addEventListener("click", onPresentedCardClickGuard, true);
+    }
+
+    function addPresentedMenuItem(menu, label, action) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.setAttribute("role", "menuitem");
+      item.setAttribute("data-rdsh-presented-menu-item", "");
+      item.textContent = label;
+      item.addEventListener("click", () => {
+        // Retire the long-press click guard first: an action that itself
+        // clicks the card (Preview) must not be swallowed by it.
+        clearPresentedClickGuard();
+        action();
+        closePresentedMenu(true);
+      });
+      menu.append(item);
+      return item;
+    }
+
+    function openPresentedMenu(hit) {
+      closePresentedMenu();
+      const menu = document.createElement("div");
+      menu.className = "rdsh-mux-files-menu";
+      menu.setAttribute("data-rdsh-presented-menu", "");
+      menu.setAttribute("role", "menu");
+      menu.setAttribute("aria-label", `${t("presented.menu")}: ${hit.name}`);
+      const items = [];
+      if (hit.sessionId !== "") {
+        items.push(addPresentedMenuItem(menu, t("presented.download"), () => void downloadPresentedFile(hit)));
+        // Only offer Share where the browser can actually share files;
+        // elsewhere the item would silently turn into a download.
+        if (presentedCanShareFiles(hit)) {
+          // Read now, so the tap can hand the file over before iOS drops the
+          // activation the sheet needs.
+          startPresentedPrefetch(hit);
+          items.push(addPresentedMenuItem(menu, t("presented.share"), () => void sharePresentedFile(hit)));
+        }
+      }
+      items.push(addPresentedMenuItem(menu, t("presented.preview"), () => hit.preview?.click?.()));
+      items.push(addPresentedMenuItem(menu, t("files.menu.copyPath"), () => copyFilesText(hit.path)));
+      document.body.append(menu);
+      const rect = typeof hit.anchor.getBoundingClientRect === "function"
+        ? hit.anchor.getBoundingClientRect()
+        : { left: 12, top: 12, bottom: 12, right: 12 };
+      const insetLeft = safeInset("left");
+      const insetRight = safeInset("right");
+      const floor = safeInset("top") + 12;
+      const width = Math.min(240, Math.max(160, window.innerWidth - insetLeft - insetRight - 24));
+      menu.style.width = `${width}px`;
+      const height = typeof menu.getBoundingClientRect === "function" ? menu.getBoundingClientRect().height : 0;
+      let top = rect.bottom + 6;
+      if (height > 0 && top + height > window.innerHeight - 12) top = Math.max(floor, rect.top - height - 6);
+      const left = Math.min(Math.max(insetLeft + 12, rect.left), Math.max(insetLeft + 12, window.innerWidth - insetRight - width - 12));
+      menu.style.top = `${Math.round(top)}px`;
+      menu.style.left = `${Math.round(left)}px`;
+      presentedMenu = { node: menu, anchor: hit.anchor, items };
+      items[0]?.focus?.();
+      document.addEventListener("pointerdown", onPresentedMenuPointerDown, true);
+      document.addEventListener("keydown", onPresentedMenuKeyDown, true);
+    }
+
+    function closePresentedMenu(restoreFocus = false) {
+      const current = presentedMenu;
+      presentedMenu = null;
+      clearPresentedClickGuard();
+      if (current === null) return;
+      document.removeEventListener("pointerdown", onPresentedMenuPointerDown, true);
+      document.removeEventListener("keydown", onPresentedMenuKeyDown, true);
+      current.node.remove();
+      if (restoreFocus && current.anchor.isConnected !== false && typeof current.anchor.focus === "function") {
+        current.anchor.focus({ preventScroll: true });
+      }
+    }
+
+    function onPresentedMenuPointerDown(event) {
+      if (presentedMenu === null) return;
+      if (presentedMenu.node.contains(event.target)) return;
+      closePresentedMenu();
+    }
+
+    function onPresentedMenuKeyDown(event) {
+      const current = presentedMenu;
+      if (current === null) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closePresentedMenu(true);
+        return;
+      }
+      const items = current.items;
+      if (items.length === 0) return;
+      const at = items.indexOf(document.activeElement);
+      if (event.key === "Tab") {
+        event.stopPropagation();
+        closePresentedMenu(true);
+        return;
+      }
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      let next;
+      if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = items.length - 1;
+      else if (at === -1) next = event.key === "ArrowDown" ? 0 : items.length - 1;
+      else next = (at + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+      items[next]?.focus?.();
+    }
+
+    /** Document-level listeners for presented cards; phone-only, installed once. */
+    function installPresentedTools() {
+      if (presentedToolsInstalled || !phone()) return;
+      presentedToolsInstalled = true;
+      document.addEventListener("pointerdown", onPresentedPointerDown, true);
+      document.addEventListener("pointermove", onPresentedPointerMove, true);
+      document.addEventListener("pointerup", onPresentedPointerUp, true);
+      document.addEventListener("pointercancel", onPresentedPointerCancel, true);
+      document.addEventListener("contextmenu", onPresentedContextMenu, true);
+    }
+
+    function disposePresentedTools() {
+      if (presentedToolsInstalled) {
+        presentedToolsInstalled = false;
+        document.removeEventListener("pointerdown", onPresentedPointerDown, true);
+        document.removeEventListener("pointermove", onPresentedPointerMove, true);
+        document.removeEventListener("pointerup", onPresentedPointerUp, true);
+        document.removeEventListener("pointercancel", onPresentedPointerCancel, true);
+        document.removeEventListener("contextmenu", onPresentedContextMenu, true);
+      }
+      closePresentedMenu();
+      cancelPresentedPress();
+    }
 
     // Draw corner-only patches below the queue row. The composer itself is never changed.
     function decorateQueueJoin(panel, dock) {
@@ -9786,7 +10601,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     const BACK_STATE = "dsh-mobile-maxxing:back";
     let exitDialog = null;
     let exitTimer = 0;
-    let lastBackSwipe = -Infinity;
+    // When this module's own left-edge swipe opened the drawer (#141). iOS
+    // Safari runs its native Back for the same edge gesture before any JS can
+    // cancel it, and that popstate arrives right after the drawer opened. The
+    // user asked for the drawer; the native Back must not close it again.
+    let lastDrawerSwipe = -Infinity;
 
     function iosBackGesture() {
       return /iPad|iPhone|iPod/.test(`${navigator.userAgent || ""} ${navigator.platform || ""}`)
@@ -9807,6 +10626,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const dialog = document.createElement("dialog");
       dialog.className = "rdsh-mux-exit";
       dialog.setAttribute("aria-labelledby", "rdsh-mux-exit-title");
+      // Focusable itself, so the dialog - not the safe choice - owns the
+      // initial focus: a programmatic focus on Cancel matched :focus-visible
+      // and painted its ring before the user touched anything (#133).
+      dialog.setAttribute("tabindex", "-1");
       const title = document.createElement("h2");
       title.id = "rdsh-mux-exit-title";
       title.textContent = t("mux.back.confirm");
@@ -9837,7 +10660,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           exitTimer = 0;
           if (exitDialog !== dialog || window.closed) return;
           message.textContent = t("mux.back.manualClose");
-          cancel.focus();
+          dialog.focus();
         }, 300);
       });
       actions.append(cancel, yes);
@@ -9845,7 +10668,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       document.body.append(dialog);
       exitDialog = dialog;
       dialog.showModal();
-      cancel.focus();
+      // Tab from here reaches Cancel, then Yes; a keyboard move paints the ring
+      // through :focus-visible only.
+      dialog.focus();
     }
 
     function mobileBack() {
@@ -9947,10 +10772,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const onBack = (event) => {
         if (event.state?.[BACK_STATE] !== "base") return;
         if (!guard()) return;
-        // Safari may report native history navigation for the same edge
-        // gesture. Whichever arrives first owns it; never go back twice.
+        // Safari reports its own native Back for the edge gesture that just
+        // opened the drawer. That popstate is the same gesture, not a second
+        // intent: consume it instead of closing the drawer the user asked for.
         edgeSwipe = null;
-        if (iosBackGesture() && Date.now() - lastBackSwipe < 600) return;
+        if (iosBackGesture() && Date.now() - lastDrawerSwipe < 600) return;
         mobileBack();
       };
       arm();
@@ -9968,24 +10794,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       };
     }
 
-    // Edge swipe from the left opens the session drawer on Android; on iOS
-    // it uses the same Back action as history navigation. From the right it
-    // pulls the preview/right sidebar (the app's own "Open right sidebar").
-    // While the preview is open the left-to-right gesture closes it instead.
+    // Edge swipe from the left opens the session drawer on every platform,
+    // iOS included (#141): the drawer is the only thing the left edge owns.
+    // Back is the Android hardware key (popstate) alone. From the right the
+    // gesture pulls the preview/right sidebar (the app's own "Open right
+    // sidebar"). While the preview is open the left-to-right swipe closes it.
     let edgeSwipe = null;
     function onEdgeSwipeStart(event) {
       edgeSwipe = null;
       if (!phone() || event.touches.length !== 1) return;
       const first = event.touches[0];
-      if (iosBackGesture() && first.clientX <= 36) {
-        lastBackSwipe = -Infinity;
-        if (event.target instanceof Element) {
-          if (event.target.closest('input, textarea, [contenteditable=true], .xterm, [data-dockkit-strip], [data-dockkit-tab]') !== null) return;
-          if (scrolledLeftAncestor(event.target) !== null) return;
-        }
-        edgeSwipe = { x: first.clientX, y: first.clientY, back: true, ready: false };
-        return;
-      }
       if (document.querySelector("[data-rdsh-lightbox], [data-rdsh-crop-overlay], [data-shortcut-modal=settings]") !== null) return;
       const touch = event.touches[0];
       const target = event.target;
@@ -10062,12 +10880,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const touch = event.touches[0];
       const dx = touch.clientX - edgeSwipe.x;
       const dy = touch.clientY - edgeSwipe.y;
-      if (edgeSwipe.back) {
-        if (Math.abs(dy) > 24 || dx < -10) { edgeSwipe = null; return; }
-        if (dx > 4 && event.cancelable) event.preventDefault();
-        edgeSwipe.ready = dx >= 64 && dx > Math.abs(dy) * 2;
-        return;
-      }
       // A vertical finger belongs to the list under it: drop the gesture and
       // let the scroll proceed. Once the movement is clearly horizontal the
       // page must not scroll, or opening the drawer also drags the session
@@ -10111,6 +10923,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (dx < 64) return;
       edgeSwipe = null;
       if (event.cancelable) event.preventDefault();
+      // iOS Safari's native Back for this same edge gesture arrives as the
+      // next popstate; onBack() sees this stamp and lets the drawer stand.
+      lastDrawerSwipe = Date.now();
       toggleDrawer();
     }
     /**
@@ -10135,14 +10950,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clearTimeout(tabReplayTimer);
       cancelLongPress();
     }
-    function onEdgeSwipeEnd(event) {
-      const back = edgeSwipe?.back && edgeSwipe.ready && event?.type !== "touchcancel";
+    function onEdgeSwipeEnd() {
+      // The gesture itself has already run on the move that crossed the
+      // threshold; the end only drops the state (#141 removed the iOS Back
+      // branch, so nothing is deferred to touchend any more).
       edgeSwipe = null;
       endTerminalDrag();
-      if (back) {
-        lastBackSwipe = Date.now();
-        mobileBack();
-      }
     }
 
     // ---------------------------------------------------------------------
@@ -10357,6 +11170,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       { id: "left", textKey: "terminalKeys.left", labelKey: "terminalKeys.arrowLeft" },
       { id: "right", textKey: "terminalKeys.right", labelKey: "terminalKeys.arrowRight" },
       { id: "ctrl", textKey: "terminalKeys.ctrl", labelKey: "terminalKeys.control" },
+      // iOS has no Ctrl+V on the soft keyboard; the row owns the paste.
+      { id: "paste", textKey: "terminalKeys.paste", labelKey: "terminalKeys.paste" },
     ];
 
     /**
@@ -10498,10 +11313,36 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         setSpecialKeyControl(state, !state.control);
         return;
       }
+      if (key === "paste") {
+        // The tap is the user activation the clipboard read needs.
+        pasteTerminalClipboard(state);
+        return;
+      }
       const control = state.control;
       const sequence = terminalKeySequence(key, terminalApplicationCursor(state.section), control);
       sendTerminalBytes(state.section, sequence);
       if (control) setSpecialKeyControl(state, false);
+    }
+
+    /**
+     * Paste the clipboard into the terminal as typed input (#147).
+     *
+     * The terminal's real textarea is visually hidden, and a phone keyboard has
+     * no Ctrl+V, so the special-key row owns the gesture. Bytes go through the
+     * same path the keys use, which is what the terminal's onData subscription
+     * listens to.
+     *
+     * @param {object} state - the mounted key row's state.
+     */
+    function pasteTerminalClipboard(state) {
+      const clipboard = navigator.clipboard;
+      if (clipboard === undefined || clipboard === null || typeof clipboard.readText !== "function") return;
+      clipboard.readText().then((text) => {
+        if (typeof text !== "string" || text === "") return;
+        sendTerminalBytes(state.section, text);
+      }).catch(() => {
+        /* Permission denied: the key stays a no-op rather than pasting nothing. */
+      });
     }
 
     function onSpecialKeyPointerDown(event) {
@@ -10724,6 +11565,27 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     let terminalFitFrame = 0;
     let terminalFitHeight = 0;
     let terminalFitMount = null;
+    /**
+     * The last measured band ("width x height"), and how many frames it held.
+     *
+     * A keyboard, a URL bar or the panel opening moves the band on every
+     * frame, and every height write makes the app's own `fitScreen` run
+     * (client.terminal.js): it calls `xterm.resize` *and* `model.resize`
+     * unconditionally, and its `proposeDimensions` recomputes cols from
+     * whatever width it sees at that instant. Committing a halfway frame
+     * therefore pushes a cols to the pty that is already stale, xterm reflows
+     * the wrapped lines for it, and the shell's prompt comes back doubled: a
+     * shell repaints its prompt at the cursor's row, and with a prompt that
+     * wrapped, that repaint leaves the same text on the rows above it too.
+     * Waiting for the band to stop moving writes the height once, at the
+     * geometry that actually stays, so a transition costs at most one pty
+     * resize instead of one per frame.
+     */
+    let terminalFitProbe = "";
+    let terminalFitHolds = 0;
+    let terminalFitBurst = 0;
+    /** Frames a still-moving band may hold the fit before it lands anyway. */
+    const TERMINAL_FIT_MAX_HOLDS = 24;
     /** The scrollbar a held fit is waiting on, and the terminal that owns it. */
     let terminalScrollWatch = null;
     let terminalScrollTarget = null;
@@ -10818,6 +11680,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       stopTerminalScrollWatch();
       terminalFitHeight = 0;
       terminalFitMount = null;
+      terminalFitProbe = "";
+      terminalFitHolds = 0;
+      terminalFitBurst = 0;
       for (const mount of document.querySelectorAll("[data-rdsh-terminal-fit]")) {
         mount.style.removeProperty("height");
         mount.style.removeProperty("flex");
@@ -10883,6 +11748,22 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // fit until the slider is back at the end (watchTerminalScroll).
       if (!terminalAtBottom(terminal) && watchTerminalScroll(terminal)) return;
       stopTerminalScrollWatch();
+      // #96: write once, at the geometry that stays. See terminalFitProbe.
+      const probe = `${Math.round(rect.width)}x${height}`;
+      if (probe === terminalFitProbe) {
+        terminalFitHolds += 1;
+      } else {
+        terminalFitProbe = probe;
+        terminalFitHolds = 0;
+        terminalFitBurst += 1;
+      }
+      // A band that keeps moving bursts past this gate; land it anyway so a
+      // viewport that never settles cannot starve the fit.
+      if (terminalFitHolds < 1 && terminalFitBurst < TERMINAL_FIT_MAX_HOLDS) {
+        scheduleTerminalFit();
+        return;
+      }
+      terminalFitBurst = 0;
       if (terminalFitMount !== null && terminalFitMount !== mount) {
         terminalFitMount.style.removeProperty("height");
         terminalFitMount.style.removeProperty("flex");
@@ -11114,10 +11995,41 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         || probeValues("navAutomation", ["Automation tasks"]).includes(label);
     }
 
+    /**
+     * Right-panel controls that need a mounted session surface (#132).
+     *
+     * `sidebarRight` throws "no session surface is mounted" when the dock's
+     * actions are asked for with no session on screen: the expand control and
+     * the dock's own "new tab" stay tappable, so on Home the tap is answered
+     * here with the guidance the Host's palette gives for the same state.
+     *
+     * @param {Event} event - the click being captured.
+     * @param {Element} target - the click's target.
+     * @returns {boolean} whether the tap was consumed.
+     */
+    function consumeNoSessionPanelTap(event, target) {
+      if (!phone() || shownSessionId() !== "") return false;
+      const button = target.closest("button[aria-label]");
+      if (button === null) return false;
+      const label = button.getAttribute("aria-label") || "";
+      const expand = probeValues("rightPanelOpen", ["Open right sidebar"]);
+      const addTab = probeValues("newRightTab", ["New tab"]);
+      if (!expand.includes(label) && !addTab.includes(label)) return false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      mobileToast(t("mux.toast.noSession"));
+      return true;
+    }
+
     function onClickCapture(event) {
       const target = event.target;
       if (target === null || target.closest === undefined) return;
+      // #132: answer a right-panel control that has no session to act on,
+      // before upstream's handler can throw for the missing surface.
+      if (consumeNoSessionPanelTap(event, target)) return;
       if (target.closest("[data-rdsh-sidebar-toggle]") !== null) {
+        // The user is opening the drawer by hand: a route's closed marker ends.
+        drawerRouteClosed = false;
         rememberDrawerScroll();
         restoreDrawerScroll();
       }
@@ -11320,6 +12232,44 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       event.stopPropagation();
     }
 
+    /**
+     * A field the open phone drawer owns (#142).
+     *
+     * Upstream's session search expands and focuses its own input from the
+     * search button's click; the focus is programmatic, so the "deliberate
+     * focus only" guard used to blur it one tick later: the keyboard flickered
+     * and every search lost its input. The drawer only exists because the user
+     * opened it, and its rows are what the user is tapping, so a field inside
+     * it is a deliberate target.
+     *
+     * @param {Element|null} field - the focused text field.
+     * @returns {boolean} whether the open drawer contains it.
+     */
+    /**
+     * A field inside a modal the user opened over the app (#146).
+     *
+     * The shell itself is a dialog on 0.2.2, so "inside a dialog" is not enough:
+     * only a dialog nested in the shell counts as a modal. The directory
+     * picker's path field is one, and the guard used to blur it 0ms after the
+     * tap, so the keyboard flashed and closed.
+     *
+     * @param {Element} field - the text box that just took focus.
+     * @returns {boolean} whether the field belongs to an open modal.
+     */
+    function modalOwnedField(field) {
+      const dialog = field.closest('[role="dialog"]');
+      if (dialog === null) return false;
+      return dialog.closest('[role="dialog"]') !== null;
+    }
+
+    function drawerOwnedField(field) {
+      if (field === null || field === undefined || typeof field.closest !== "function") return false;
+      const root = document && document.documentElement;
+      if (root === null || root === undefined || typeof root.getAttribute !== "function") return false;
+      if (root.getAttribute("data-rdsh-drawer") !== "open") return false;
+      return field.closest("[data-rdsh-sidebar]") !== null;
+    }
+
     function onFocusInGuard(event) {
       if (!phone()) return;
       const field = textBoxOf(event.target);
@@ -11327,6 +12277,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // Only a field deliberately chosen by pointer or Tab may keep focus.
       // App/session opening and programmatic refocusing do not open a keyboard.
       if (field === allowFocusElement) return;
+      if (drawerOwnedField(field)) return;
+      if (modalOwnedField(field)) return;
       // Deferred: Safari/the app re-focuses synchronously from its onFocus
       // handler, so an immediate blur() recurses until the stack overflows.
       setTimeout(() => {
@@ -12864,6 +13816,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /** How long a selected session is re-asserted after a notification tap. */
     const SESSION_CONFIRM_MS = 15000;
+    /**
+     * The session this device last showed (#131).
+     *
+     * The shell keeps no session in the URL, so a reload - including the offline
+     * one served from the service worker - starts on the workspace picker with
+     * no composer. The id lives in this browser only and is restored only when
+     * the URL carries none.
+     */
+    const LAST_SESSION_KEY = "dsh-mobile-maxxing:last-session";
     /** Set while this module is opening a session, to stop re-entrancy. */
     let selectingSession = false;
     /** The session a notification asked for, until the DOM shows it. */
@@ -12889,6 +13850,60 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       sessionOpener?.();
     }
 
+    /**
+     * Remember the session this device is showing (#131).
+     *
+     * A desktop keeps the upstream UI untried and untouched: it neither writes
+     * the key nor reads it back, so "last session" stays a phone affordance.
+     *
+     * @param {string|null} sessionId - the session now on screen, or null.
+     */
+    function rememberLastSession(sessionId) {
+      if (!phone()) return;
+      try {
+        if (typeof sessionId === "string" && sessionId !== "") localStorage.setItem(LAST_SESSION_KEY, sessionId);
+      } catch {
+        /* private mode: the restore below simply finds nothing */
+      }
+    }
+
+    /** The session last written to this device, to keep the decorator quiet. */
+    let markedSession = "";
+
+    /**
+     * Store the session the chat is showing (#131).
+     *
+     * The composer slot is not always mounted (the drawer path never mounts it),
+     * so the value is read from the DOM the same way the back gesture reads it,
+     * and written only when it changes: the decorator runs on every mutation.
+     */
+    function syncLastSession() {
+      if (!phone()) return;
+      const shown = shownSessionId();
+      if (shown === markedSession) return;
+      markedSession = shown;
+      rememberLastSession(shown);
+    }
+
+    /**
+     * The session to restore when the URL carries none (#131).
+     *
+     * Offline is not a reason to skip the restore: the service worker can boot
+     * this page and the local shell can still open a session it already knows.
+     * An id that no longer opens is dropped by `attachSessionOpener`'s catalog
+     * check, which leaves the stock workspace picker in place.
+     *
+     * @returns {string} a session id, or "" when there is nothing to restore.
+     */
+    function lastSessionFromStorage() {
+      if (!phone()) return "";
+      try {
+        return localStorage.getItem(LAST_SESSION_KEY) ?? "";
+      } catch {
+        return "";
+      }
+    }
+
     /** The session the chat is currently showing, read from the DOM. */
     function shownSessionId() {
       try {
@@ -12909,12 +13924,25 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const sessions = typeof scope.get === "function" ? scope.get("sessions") : undefined;
       // A session the catalog does not know cannot be opened; when there is no
       // catalog, trying is still safe because retain() rejects unknown ids.
-      const known = (id) => {
-        if (sessions === undefined) return true;
+      /**
+       * What the catalog says about an id (#131).
+       *
+       * A reload mounts this plugin before the session catalog has loaded, so
+       * "absent from an empty catalog" must stay pending instead of dropping
+       * the boot restore; only an id missing from a loaded catalog is gone.
+       *
+       * @param {string} id - the session id the phone asked for.
+       * @returns {"known"|"missing"|"loading"} the catalog's answer.
+       */
+      const catalogState = (id) => {
+        if (sessions === undefined) return "known";
         try {
-          return sessions?.list?.getSnapshot()?.byId?.[id] !== undefined;
+          const byId = sessions?.list?.getSnapshot()?.byId;
+          if (byId === undefined) return "loading";
+          if (Object.keys(byId).length === 0) return "loading";
+          return byId[id] !== undefined ? "known" : "missing";
         } catch {
-          return true;
+          return "known";
         }
       };
       /**
@@ -12928,8 +13956,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (selectingSession) return;
         if (wantedSession === "") return;
         const id = wantedSession;
-        if (!known(id)) {
+        const state = catalogState(id);
+        if (state === "missing") {
           wantedSession = "";
+          return;
+        }
+        if (state === "loading") {
+          // Still loading: keep the request alive; the timer below retries.
           return;
         }
         selectingSession = true;
@@ -13575,10 +14608,22 @@ html[data-rdsh-device-mode="mobile"] body > [role="alert"]:has([data-rdsh-notice
 html[data-rdsh-device-mode="mobile"] body > [role="alert"]:has([data-rdsh-notice-icon]) > span:last-child { display: flex; flex: 1 1 auto; align-items: center; min-width: 0; }
 html[data-rdsh-device-mode="mobile"] body > [role="alert"]:has([data-rdsh-notice-icon]) button { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; align-self: center; min-height: 44px; min-width: 56px; margin-left: auto; padding: 6px 12px; border: 1px solid currentColor; border-radius: 9px; font: inherit; font-weight: 600; text-decoration: none; }
 html[data-rdsh-device-mode="mobile"] [data-rdsh-notice-icon] { width: 18px; height: 18px; }
+/* #133: the exit confirmation is a bottom sheet on a phone. It is anchored to
+   the bottom edge (so it never floats over the composer and the welcome
+   heading in the middle of the screen), the safe-area strip is part of its
+   padding, and its own height is bounded with an internal scroll. The dialog
+   focuses Cancel itself, so a plain :focus ring would always be visible: the
+   ring is painted for keyboard users only. */
 .rdsh-mux-exit {
-  box-sizing: border-box; width: min(360px, calc(100vw - 32px));
-  border: 1px solid var(--dsw-alias-border-l3, #888); border-radius: 16px;
-  padding: 24px; color: var(--dsw-alias-label-primary, #222);
+  box-sizing: border-box;
+  inset: auto 0 0 0; height: auto;
+  margin: 0 auto; /* bottom-anchored; never the UA's vertical centring */
+  width: min(480px, 100vw); max-width: 100vw;
+  max-height: calc(100svh - 96px);
+  overflow-y: auto; overscroll-behavior: contain;
+  padding: 20px 20px calc(20px + max(env(safe-area-inset-bottom, 0px), var(--rdsh-safe-bottom, 0px)));
+  border: 1px solid var(--dsw-alias-border-l3, #888); border-radius: 16px 16px 0 0;
+  color: var(--dsw-alias-label-primary, #222);
   background: var(--dsw-alias-background-primary, Canvas); font: inherit;
 }
 .rdsh-mux-exit::backdrop { background: rgba(0,0,0,.45); }
@@ -13590,7 +14635,29 @@ html[data-rdsh-device-mode="mobile"] [data-rdsh-notice-icon] { width: 18px; heig
   min-height: 44px; padding: 8px 16px; border: 1px solid currentColor;
   border-radius: 8px; color: inherit; background: transparent; font: inherit;
 }
+.rdsh-mux-exit button:focus { outline: none; }
+.rdsh-mux-exit button:focus-visible {
+  outline: 2px solid var(--dsw-alias-link, #4d6bfe); outline-offset: 2px;
+}
 .rdsh-mux-exit button:disabled { opacity: .5; }
+/* #135: upstream draws its chrome icon buttons at 20-28px and every class
+   name carries a build hash ("hHd-Xa_iconButton", "_addTab_<hash>_<n>"), so no
+   stylesheet can name them. decorateTapTargets() tags the small icon-only ones
+   instead; this overlay extends only the hit area - it is absolutely
+   positioned, so nothing moves and the drawn size stays the same. Mobile sheet
+   only: a desktop is never tagged. */
+[data-rdsh-hit44] { position: relative; }
+[data-rdsh-hit44]::after {
+  content: ""; position: absolute; inset: 0; margin: auto;
+  width: 44px; height: 44px;
+  /* The overlay is the button's own hit area: it must receive the pointer and
+     hand it to its host. */
+  pointer-events: auto;
+}
+/* The dialog itself takes the initial focus, so its buttons start without a
+   ring; a keyboard Tab still paints one through :focus-visible. */
+.rdsh-mux-exit:focus,
+.rdsh-mux-exit:focus-visible { outline: none; }
 /* Controls the hide list matched. The attribute these selectors key off is
    written only while phone() holds (see applyHideList), and the rules sit in
    the mobile sheet as well: a desktop keeps every control. */
@@ -14049,6 +15116,15 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   }
   body { display: grid !important; grid-template-rows: 100dvh !important; }
   #root { height: 100% !important; min-height: 0 !important; box-sizing: border-box !important; }
+  /* #145: iOS Safari's text autosizing inflates block text from the block's
+     width and re-evaluates only on a viewport change, so the transcript kept
+     its boot-time size until the phone was rotated. This is a fixed-layout
+     PWA with its own text sizes (Settings > Body text), so autosizing is off.
+     Phone sheet only: a desktop keeps the browser's default. */
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
   [data-rdsh-scroll] { overscroll-behavior-y: contain; }
 
   /* One slide for both sheets, so opening and closing read the same whether
@@ -14160,6 +15236,20 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   }
   html[data-rdsh-drawer="open"] .rdsh-mux-backdrop { display: block; opacity: 1; pointer-events: auto; }
   .rdsh-mux-fab { display: flex; }
+
+  /* #143: one page of session rows. The tag is written by
+     decorateSessionLimit() and leaves the row itself untouched, so opening the
+     session, its menu and every row action keep their own DOM. */
+  [data-rdsh-session-overflow] { display: none !important; }
+  .rdsh-mux-session-more {
+    display: flex; align-items: center; justify-content: center;
+    box-sizing: border-box; width: calc(100% - 8px); min-height: 40px;
+    margin: 6px 4px 10px; padding: 0 10px;
+    border: 0; border-radius: 8px; background: transparent;
+    color: var(--dsw-alias-link, #4d6bfe); font: inherit; font-size: 13px;
+    cursor: pointer;
+  }
+  .rdsh-mux-session-more:active { background: var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12)); }
   html[data-rdsh-drawer="open"] .rdsh-mux-fab { display: none; }
 
   /* Keyboard up: the app is exactly the visible area (see fitVisualViewport).
@@ -14384,6 +15474,18 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      never disables the callout. */
   [data-rdsh-session],
   [data-rdsh-session] * {
+    -webkit-user-select: none !important;
+    user-select: none !important;
+    -webkit-touch-callout: none !important;
+  }
+
+  /* The presented-file card opens its own long-press menu (Download / Share /
+     Preview / Copy path), so the system must not select its text or raise the
+     iOS callout ("Copy", "Look Up") while a finger rests on it. Only the card
+     is exempt: body text, tool output and every other transcript node keep the
+     stock selection behaviour. */
+  [data-presented-file],
+  [data-presented-file] * {
     -webkit-user-select: none !important;
     user-select: none !important;
     -webkit-touch-callout: none !important;
@@ -14920,6 +16022,16 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   /* The answer field takes its height from a hidden mirror, so both layers
      must share the font size (16px here stops iOS from zooming on focus). */
   [data-rdsh-question-card] [class*="_field"] > * { font-size: 16px !important; }
+
+  /* A modal opened over the app (the directory picker, a rename sheet) takes
+     the keyboard in place. iOS zooms the whole page when the focused field is
+     under 16px, which reads as the dialog scaling itself to fit; the shell is
+     a dialog too, so only nested dialogs are matched. */
+  [role="dialog"] [role="dialog"] [contenteditable="true"],
+  [role="dialog"] [role="dialog"] textarea,
+  [role="dialog"] [role="dialog"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) {
+    font-size: 16px !important;
+  }
   /* The on-screen keyboard shrinks the layout viewport, and upstream's 60vh
      cap then collapsed the card to its header and footer before the answer
      field. While a field inside the card has focus, size the card from the
@@ -15356,7 +16468,10 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         // screen, and reports a tap the same way. `?session=` covers the cold
         // start, where no worker message can arrive before the page renders.
         navigator.serviceWorker?.addEventListener("message", onWorkerMessage);
-        const bootSession = sessionFromUrl();
+        // #131: the URL carries a session only when a notification tap put one
+        // there. Otherwise this device's last session is restored, offline
+        // included; an id that no longer opens falls back to the picker.
+        const bootSession = sessionFromUrl() || lastSessionFromStorage();
         if (bootSession !== "") requestSession(bootSession);
         const disposeMobileBack = installMobileBack();
         document.addEventListener("touchstart", onTouchStart, { capture: true, passive: true });
@@ -15738,6 +16853,13 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         runFilesSearch,
         installWorkspaceTools,
         disposeWorkspaceTools,
+        presentedCardAt,
+        openPresentedMenu,
+        closePresentedMenu,
+        downloadPresentedFile,
+        presentedDownloadUrl,
+        setPresentedRemote: (remote) => { presentedRemote = remote ?? null; },
+        presentedMenu: () => presentedMenu,
         filesMenu: () => filesMenu,
         filesSearch: () => filesSearch,
       };
@@ -15774,6 +16896,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         });
         ctx.inject(["remote", "remote.permissionPresets"], (scope) => {
           if (phone()) void loadPermissionCatalog(scope.remote);
+        });
+        ctx.inject(["remote"], (scope) => {
+          presentedRemote = scope.remote ?? scope.get?.("remote") ?? null;
         });
         // The shared theme presenter can boot after this plugin. Resolve the
         // service through injection so a stored device choice is applied as
