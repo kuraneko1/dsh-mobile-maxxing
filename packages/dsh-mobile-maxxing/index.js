@@ -36,6 +36,8 @@ import { COPY, PROBES, copyFor, serviceWorkerCopy } from "./lib/copy.js";
 import { copyTable } from "./lib/copy-source.js";
 import { MANIFEST_FILE, MODE_GLOBAL, earlyModeScript } from "./lib/device-mode.js";
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { isAbsolute, resolve as resolvePath } from "node:path";
 import { spawn } from "node:child_process";
 
 /** Stable Cordis plugin name. */
@@ -323,19 +325,61 @@ function assetPath(file) {
 
 
 /**
+ * The command that runs *this* installation's DSH CLI.
+ *
+ * The update used to spawn a bare `dsh`, which assumes the CLI is on the
+ * server's PATH. It is not under a systemd unit with a minimal PATH, in a
+ * container, under launchd, or on Windows (where the shim is `dsh.cmd`): the
+ * install failed with `spawn dsh ENOENT` even though the server was running
+ * that very CLI. The running process knows its own entry script, so use it with
+ * the same Node binary and only fall back to PATH when it was embedded another
+ * way.
+ */
+export function resolveDshCli({
+	argv = process.argv,
+	execPath = process.execPath,
+	platform = process.platform,
+} = {}) {
+	const entry = Array.isArray(argv) ? argv[1] : undefined;
+	if (typeof entry === "string" && /(^|[\\/])bin\.js$/.test(entry)) {
+		const script = isAbsolute(entry) ? entry : resolvePath(entry);
+		// A path that no longer exists (the install moved, the cwd changed) is
+		// no better than guessing: let the PATH fallback speak for itself.
+		if (existsSync(script)) return { command: execPath, args: [script], shell: false, via: "process" };
+	}
+	return platform === "win32"
+		? { command: "dsh.cmd", args: [], shell: true, via: "path" }
+		: { command: "dsh", args: [], shell: false, via: "path" };
+}
+
+/**
  * Install the confirmed release in the active profile.
  *
  * @returns {Promise<void>}
  */
 function runPluginUpdate(profile, tag) {
+	const cli = resolveDshCli();
 	return new Promise((resolve, reject) => {
-		const child = spawn("dsh", ["plugin", "--profile", profile, "add", `github:kuraneko1/dsh-mobile-maxxing#${tag}`], {
+		// The release tarball, not `github:`: the git form needs a git binary and
+		// a working ssh/https clone in the server's environment, which is where
+		// a packaged deployment usually differs from a developer machine.
+		const spec = `https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/${tag}/dsh-mobile-maxxing.tgz`;
+		const child = spawn(cli.command, [...cli.args, "plugin", "--profile", profile, "add", spec], {
 			stdio: ["ignore", "ignore", "pipe"],
 			timeout: 120000,
+			shell: cli.shell,
 		});
 		let stderr = "";
 		child.stderr.on("data", (chunk) => { stderr = (stderr + String(chunk)).slice(-16000); });
-		child.on("error", reject);
+		child.on("error", (error) => {
+			// Say what to do instead of forwarding "spawn dsh ENOENT" verbatim.
+			const code = error && typeof error === "object" ? error.code : undefined;
+			if (code === "ENOENT") {
+				reject(new Error(`dsh CLI not found (tried ${cli.command}). Start DSH with its CLI on PATH, or install it with: npm i -g @deepseek-ai/dsh`));
+				return;
+			}
+			reject(error);
+		});
 		child.on("close", (code) => {
 			if (code === 0) resolve();
 			else reject(new Error(stderr.trim() || `exit ${code}`));

@@ -689,7 +689,7 @@ test("confirmed update installs only the checked release in the active profile",
     const result = await call(routes.get("/dsh-mobile-maxxing/update-plugins"), "POST", undefined, { "x-dsh-release": nextTag });
     assert.equal(result.status, 200);
     assert.deepEqual(JSON.parse(result.text), { ok: true, version: nextTag });
-    assert.deepEqual((await readFile(output, "utf8")).trim().split("\n"), ["plugin", "--profile", "test", "add", `github:kuraneko1/dsh-mobile-maxxing#${nextTag}`]);
+    assert.deepEqual((await readFile(output, "utf8")).trim().split("\n"), ["plugin", "--profile", "test", "add", `https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/${nextTag}/dsh-mobile-maxxing.tgz`]);
     assert.equal((await call(routes.get("/dsh-mobile-maxxing/update-plugins"), "POST", undefined, { "x-dsh-release": nextTag })).status, 409);
   } finally {
     globalThis.fetch = originalFetch;
