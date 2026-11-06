@@ -6951,7 +6951,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /** Add a Settings row to the sidebar panel list, matching Plugins. */
     function openSettingsViaAccountMenu() {
-      const trigger = document.querySelector(ariaLabelSelector("button", "accountMenu", "Account menu"));
+      // The label is translated into every language the shell ships; when the
+      // probe still misses one, the row this plugin already tagged as the
+      // account row is the same control by structure.
+      const trigger = document.querySelector(ariaLabelSelector("button", "accountMenu", "Account menu"))
+        ?? document.querySelector("[data-rdsh-more-row] button")
+        ?? null;
       if (trigger === null) return;
       settingsPendingUntil = Date.now() + 2000;
       trigger.click();
@@ -15500,6 +15505,15 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
        row's own 28px inner pad goes: with the sidebar as a drawer that slot is
        empty, and the title ended up 92px from the edge instead of 64 (#145). */
     html[data-rdsh-device-mode="mobile"] header[data-window-drag]:has([data-conversation-header-leading]) [class*="_titleRow"] { padding-left: 0 !important; }
+    /* The composer's stat dock shrinks its pills until their text spills over
+       the next item. A longer language (es "1 turnos, 3 pasos", pt) measured
+       95px of text in a 79px pill, with overflow visible, so the labels
+       collided. Let the dock wrap instead of squeezing: ja/en still fit one
+       line, so nothing moves for them. */
+    html[data-rdsh-device-mode="mobile"] [class*="_dock"] { flex-wrap: wrap; row-gap: 2px; }
+    /* A translation can be wider than the drawer's label column; a clipped
+       word with no ellipsis reads as a rendering bug. */
+    html[data-rdsh-device-mode="mobile"] [data-rdsh-sidebar] [class*="_sectionLabel"] { text-overflow: ellipsis; }
     [data-sidebar-right-panel] [data-dockkit-split]:has(> [data-dockkit-host][data-dockkit-column="1"]) {
       grid-template-columns: minmax(0, 1fr) !important;
       grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) !important;

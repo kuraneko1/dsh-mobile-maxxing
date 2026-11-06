@@ -735,9 +735,12 @@ export const COPY = {
  */
 export const PROBES = {
 	/** The account/menu button that opens Settings. */
-	accountMenu: ["Account menu", "アカウントメニュー"],
+	// The account trigger is upstream's own control: 0.2.2 translates it into
+	// every shipped language, so a probe that only knows en/ja made the drawer's
+	// Settings row dead for zh/es/fr/de/ru/pt (#145).
+	accountMenu: ["Account menu", "アカウントメニュー", "账号菜单", "Menú de cuenta", "Menu du compte", "Kontomenü", "Меню аккаунта", "Menu da conta"],
 	/** The Settings row inside that menu. */
-	settingsMenu: ["Settings", "設定"],
+	settingsMenu: ["Settings", "設定", "设置", "Configuración", "Paramètres", "Einstellungen", "Настройки", "Configurações"],
 	/** Localized leaves of the phone's default hide list. The English names
 	 *  stay in client.js; these are the committed ja renderings of the same
 	 *  controls ("Open configuration file", "More actions", …). */
@@ -751,8 +754,10 @@ export const PROBES = {
 		"組み込みプラグイン",
 	],
 	/** Sidebar rows folded into the landscape More menu. */
-	navPlugins: ["Plugins", "插件", "プラグイン"],
-	navAutomation: ["Automation tasks", "自动化任务", "自動化タスク"],
+	// Every language the shell ships, so the injected Settings row lands after
+	// the same row everywhere (#145): a missing anchor pushed it to the end.
+	navPlugins: ["Plugins", "插件", "プラグイン", "Complementos", "Plug-ins", "Erweiterungen", "Расширения"],
+	navAutomation: ["Automation tasks", "自动化任务", "自動化タスク", "Tareas de automatización", "Tâches d'automatisation", "Automatisierungsaufgaben", "Задачи автоматизации", "Tarefas de automação"],
 	/** The Automation-tasks detail's close control: the only way back to the list
 	 *  once upstream hides the list on a phone. */
 	closeTaskDetail: ["Close details", "关闭详情", "詳細を閉じる"],
