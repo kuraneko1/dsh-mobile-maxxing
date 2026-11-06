@@ -4,7 +4,7 @@
 
 本项目提供一组插件，用于改善 DSH（DeepSeek Harness）Web UI 在手机和平板电脑上的使用体验。涵盖 PWA、移动端布局、通知、Markdown 表格和日语 UI，可按需安装相应组件。
 
-**[最新发布 v1.0.2](https://github.com/kuraneko1/dsh-mobile-maxxing/releases/tag/v1.0.2)** · **[发布说明（日语）](RELEASE-NOTES-v1.0.2.md)**
+**[最新发布 v1.0.3](https://github.com/kuraneko1/dsh-mobile-maxxing/releases/tag/v1.0.3)** · **[发布说明（日语）](RELEASE-NOTES-v1.0.3.md)**
 
 - 移动端主插件可以直接安装在原生 DSH 上，无需安装任何额外的第三方推送通知库。
 - 根据设备类型判定是否启用移动模式，不以窗口宽度作为依据，因此窄屏 PC 窗口或支持触控的 Windows PC 不会被误识别为移动设备。
@@ -15,7 +15,7 @@
 
 | 组件 | 作用 | 当前版本 | 来源 |
 | --- | --- | --- | --- |
-| `dsh-mobile-maxxing` | PWA、通知、移动端用户体验（UX） | 1.0.2 | 本仓库 |
+| `dsh-mobile-maxxing` | PWA、通知、移动端用户体验（UX） | 1.0.3 | 本仓库 |
 | `dsh-md-rendering` | 移动端 Markdown 表格渲染 | 0.1.3 | [kuraneko1/dsh-md-rendering](https://github.com/kuraneko1/dsh-md-rendering) / [`packages/dsh-md-rendering`](packages/dsh-md-rendering) |
 | `dsh-locale-ja` | 日语界面（包含 65 个命名空间、2915 个词条） | 0.1.2 | [kuraneko1/dsh-locale-ja](https://github.com/kuraneko1/dsh-locale-ja) / [`packages/dsh-locale-ja`](packages/dsh-locale-ja) |
 
@@ -41,7 +41,7 @@
 curl -fsSL https://raw.githubusercontent.com/kuraneko1/dsh-mobile-maxxing/main/scripts/install-mobile-bundle.mjs | node --input-type=module
 ```
 
-默认情况下，该操作会将组件安装至 `web` profile 中。其中，移动端主插件和日语语言包将安装各自仓库的 `main` 分支版本，Markdown 表格插件则安装 `v1.0.2` 发布中的 `0.1.3` 版本安装包。
+默认情况下，该操作会将组件安装至 `web` profile 中。其中，移动端主插件和日语语言包将安装各自仓库的 `main` 分支版本，Markdown 表格插件则安装 `v1.0.3` 发布中的 `0.1.3` 版本安装包。
 安装完成后，请重启 DSH 并刷新浏览器页面。
 
 若需使用其他 profile：
@@ -66,7 +66,7 @@ dsh plugin --profile web add github:kuraneko1/dsh-locale-ja
 ### 仅添加 Markdown 表格支持
 
 ```sh
-dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v1.0.2/dsh-md-rendering-0.1.3.tgz
+dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v1.0.3/dsh-md-rendering-0.1.3.tgz
 ```
 
 执行 `dsh plugin --profile web add` 会同时更新依赖和 bundle 列表，无需先执行 `cd ~/.dsh/profiles/web`。
@@ -160,7 +160,7 @@ v1.0.0 版本还增强了通知的可靠性与安全性：
 | 环境变量 | 用途 | 默认值 |
 | --- | --- | --- |
 | `DSH_PROFILE` | 安装目标 profile | `web` |
-| `DSH_BUNDLE_TAG` | 指定 Markdown 表格插件安装包所在的发布标签；显式设置时，移动端主插件也会使用相同的 Git 分支或标签 | `v1.0.2`（移动端主插件默认使用 `main`） |
+| `DSH_BUNDLE_TAG` | 指定 Markdown 表格插件安装包所在的发布标签；显式设置时，移动端主插件也会使用相同的 Git 分支或标签 | `v1.0.3`（移动端主插件默认使用 `main`） |
 | `DSH_BUNDLE_BASE_URL` | Markdown 表格插件安装包的基础下载 URL | 指定发布标签对应的 GitHub Releases 下载地址 |
 | `DSH_LOCALE_REF` | 安装日语语言包时使用的 Git 分支或标签 | `main` |
 | `DSH_MD_VERSION` | Markdown 表格插件的版本号 | `0.1.3` |
@@ -169,7 +169,7 @@ v1.0.0 版本还增强了通知的可靠性与安全性：
 
 ```sh
 DSH_PROFILE=web-mobile \
-DSH_BUNDLE_TAG=v1.0.2 \
+DSH_BUNDLE_TAG=v1.0.3 \
 DSH_LOCALE_REF=main \
 DSH_MD_VERSION=0.1.3 \
   node scripts/install-mobile-bundle.mjs

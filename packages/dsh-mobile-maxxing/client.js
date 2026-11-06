@@ -574,6 +574,8 @@ window.__ModuleLoader__.load({
     const ROOT_ATTR = "data-dsh-mobile-maxxing";
     const UPDATE_POLL_MS = 30 * 60 * 1000;
     const UPDATE_MIN_GAP_MS = 5 * 60 * 1000;
+    /** Failure codes the host sends; each has a "update.reason/hint.<code>" pair. */
+    const UPDATE_FAILURES = new Set(["cli-missing", "network", "timeout", "release-missing", "permission", "disk", "busy", "unknown"]);
     const INSTALL_PROMPT_KEY = "dsh-mobile-maxxing:install-prompt-dismissed";
     const INSTALL_PROMPT_SNOOZE_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -614,6 +616,12 @@ window.__ModuleLoader__.load({
 .rdsh-update-actions button { min-height: 44px; min-width: 100px; border: 1px solid var(--dsw-alias-border-l2, #777); border-radius: 10px; font: inherit; color: inherit; background: transparent; }
 .rdsh-update-actions button:last-child { border-color: currentColor; font-weight: 700; }
 .rdsh-update-spinner { margin: 24px auto 0; width: 32px; height: 32px; border: 3px solid var(--dsw-alias-border-l2, #7775); border-top-color: currentColor; border-radius: 50%; animation: rdsh-update-spin .8s linear infinite; }
+.rdsh-update-failure { margin-top: 16px; text-align: start; }
+.rdsh-update-reason { margin: 0; font-weight: 600; }
+.rdsh-update-hint { margin: 6px 0 0; color: var(--dsw-alias-label-secondary, #a1a1aa); font-size: 13px; line-height: 1.5; }
+.rdsh-update-failure details { margin-top: 10px; font-size: 12px; color: var(--dsw-alias-label-secondary, #a1a1aa); }
+.rdsh-update-failure summary { cursor: pointer; }
+.rdsh-update-failure pre { margin: 8px 0 0; padding: 8px 10px; max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 8px; background: var(--dsw-alias-bg-layer-1, #0003); font-size: 11px; line-height: 1.45; text-align: start; }
 @keyframes rdsh-update-spin { to { transform: rotate(360deg); } }
 html[data-dsh-mobile-maxxing="standalone"] #root {
   box-sizing: border-box;
@@ -1261,26 +1269,51 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const [phase, setPhase] = useState("");
       const { createPortal } = require("react-dom");
       const [release, setRelease] = useState("");
-      const [error, setError] = useState("");
+      // A failure the user can act on: a localised reason, what to do, and the
+      // installer output as secondary detail. The server sends a stable code;
+      // anything it does not know becomes "unknown" rather than raw stderr.
+      const [failure, setFailure] = useState(null);
       const repository = "https://github.com/kuraneko1/dsh-mobile-maxxing/releases";
+      const describeFailure = (data, fallback) => {
+        const code = typeof data?.code === "string" && UPDATE_FAILURES.has(data.code) ? data.code : "unknown";
+        const detail = typeof data?.detail === "string" ? data.detail.trim() : "";
+        return {
+          reason: t(`update.reason.${code}`),
+          hint: t(`update.hint.${code}`),
+          detail: detail !== "" ? detail : (typeof fallback === "string" ? fallback : ""),
+        };
+      };
+      const offlineFailure = (reason) => ({
+        reason: t("update.reason.network"),
+        hint: t("update.hint.network"),
+        detail: String(reason?.message || reason || ""),
+      });
       const checkRelease = async () => {
-        setPhase("checking"); setError("");
+        setPhase("checking"); setFailure(null);
         try {
           const response = await fetch("/dsh-mobile-maxxing/plugin-version", { cache: "no-store" });
-          const data = await response.json();
-          if (!response.ok || typeof data.latest !== "string" || typeof data.available !== "boolean") throw new Error(data.error || response.status);
+          const data = await response.json().catch(() => null);
+          if (!response.ok || typeof data?.latest !== "string" || typeof data.available !== "boolean") {
+            setFailure(describeFailure(data, `HTTP ${response.status}`));
+            setPhase("error");
+            return;
+          }
           setRelease(data.ahead && typeof data.current === "string" ? data.current : data.latest);
           setPhase(data.available ? "available" : data.ahead ? "ahead" : "latest");
-        } catch (reason) { setError(String(reason?.message || reason)); setPhase("error"); }
+        } catch (reason) { setFailure(offlineFailure(reason)); setPhase("error"); }
       };
       const installRelease = async () => {
-        setPhase("installing"); setError("");
+        setPhase("installing"); setFailure(null);
         try {
           const response = await fetch("/dsh-mobile-maxxing/update-plugins", { method: "POST", headers: { "x-dsh-release": release } });
-          const data = await response.json();
-          if (!response.ok || data.ok !== true || data.version !== release) throw new Error(data.error || response.status);
+          const data = await response.json().catch(() => null);
+          if (!response.ok || data?.ok !== true || data.version !== release) {
+            setFailure(describeFailure(data, `HTTP ${response.status}`));
+            setPhase("install-error");
+            return;
+          }
           setPhase("done");
-        } catch (reason) { setError(String(reason?.message || reason)); setPhase("install-error"); }
+        } catch (reason) { setFailure(offlineFailure(reason)); setPhase("install-error"); }
       };
       const busy = phase === "checking" || phase === "installing";
       return h("section", { className: "dsh-mobile-maxxing-section" },
@@ -1300,7 +1333,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             phase === "confirm" ? h("a", { href: repository, target: "_blank", rel: "noopener noreferrer" }, repository) : null,
             ["latest", "ahead", "available", "installing", "done"].includes(phase) ? h("p", null, t("update.release", { version: release })) : null,
             phase === "done" ? h("p", null, t("update.restart")) : null,
-            error ? h("p", { role: "alert" }, error) : null,
+            failure !== null ? h("div", { className: "rdsh-update-failure", role: "alert" },
+              h("p", { className: "rdsh-update-reason" }, failure.reason),
+              failure.hint !== "" ? h("p", { className: "rdsh-update-hint" }, failure.hint) : null,
+              failure.detail !== "" ? h("details", null,
+                h("summary", null, t("update.details")),
+                h("pre", null, failure.detail)) : null) : null,
             busy ? h("div", { className: "rdsh-update-spinner", role: "status", "aria-label": t(phase === "checking" ? "update.checking" : "update.installing") }) : null,
             !busy ? h("div", { className: "rdsh-update-actions" },
               phase === "confirm" ? h("button", { type: "button", onClick: () => setPhase("") }, t("update.no")) : null,
