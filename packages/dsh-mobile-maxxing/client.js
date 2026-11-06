@@ -8087,7 +8087,40 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       fab.className = "rdsh-mux-fab";
       fab.setAttribute("aria-label", t("mux.fab.open"));
       fab.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6.5h16M4 12h16M4 17.5h16"/></svg><span class="rdsh-mux-fab-badge" aria-hidden="true"></span>';
-      fab.addEventListener("click", toggleDrawer);
+      /**
+       * The hamburger sits in the left-edge band the OS gesture is claimed in,
+       * so the `touchstart` cancel in `onEdgeSwipeStart` also kills the
+       * synthesized click: the tap looked like nothing happened (both iOS and
+       * Android). Act on the touchend instead -- sooner than a click, and
+       * regardless of what the edge claim did to it. The click handler stays
+       * for mice and keyboards, with a guard against the doubled event.
+       */
+      let fabTap = null;
+      let fabActedAt = 0;
+      fab.addEventListener("touchstart", (event) => {
+        if (event.touches.length !== 1) { fabTap = null; return; }
+        const touch = event.touches[0];
+        fabTap = { x: touch.clientX, y: touch.clientY };
+      }, { passive: true });
+      fab.addEventListener("touchmove", (event) => {
+        if (fabTap === null || event.touches.length !== 1) return;
+        const touch = event.touches[0];
+        if (Math.abs(touch.clientX - fabTap.x) + Math.abs(touch.clientY - fabTap.y) > 10) fabTap = null;
+      }, { passive: true });
+      const fabTapEnd = (event) => {
+        const pending = fabTap;
+        fabTap = null;
+        if (pending === null) return;
+        if (event !== null && event.cancelable) event.preventDefault();
+        fabActedAt = Date.now();
+        toggleDrawer();
+      };
+      fab.addEventListener("touchend", fabTapEnd);
+      fab.addEventListener("touchcancel", () => { fabTap = null; });
+      fab.addEventListener("click", () => {
+        if (Date.now() - fabActedAt < 500) return;
+        toggleDrawer();
+      });
 
       backdrop = document.createElement("div");
       backdrop.className = "rdsh-mux-backdrop";

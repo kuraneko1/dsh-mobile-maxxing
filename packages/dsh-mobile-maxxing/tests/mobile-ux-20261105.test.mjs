@@ -522,3 +522,12 @@ test("an idle session stops asking for the live speed", () => {
 	assert.match(CLIENT, /timer = window\.setTimeout\(loop, lastTps > 0 \? 500 : 5000\);/, "idle polls back off");
 	assert.match(CLIENT, /let lastTps = 0;/, "the last rate is remembered");
 });
+
+test("the hamburger answers the touch, not a click the edge claim may eat", () => {
+	// The FAB sits at x=8..48, inside the 28px band the iOS edge gesture is
+	// claimed in, so the touchstart cancel also killed the synthesized click:
+	// taps looked like nothing happened. It acts on touchend instead.
+	assert.match(CLIENT, /fab\.addEventListener\("touchend", fabTapEnd\)/, "the FAB waits for a click");
+	assert.match(CLIENT, /fab\.addEventListener\("touchmove"/, "a drag is not a tap");
+	assert.match(CLIENT, /if \(Date\.now\(\) - fabActedAt < 500\) return;/, "the click repeats the touchend action");
+});
