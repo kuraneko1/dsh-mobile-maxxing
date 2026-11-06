@@ -87,10 +87,15 @@ test("the nested manifest and the README install URLs match the root version", a
 	}
 });
 
-test("the bundle installer defaults to the current release and pins the main package", async () => {
+test("the bundle installer defaults to the latest published release and pins the main package", async () => {
 	const script = await readFile(join(repo, "scripts", "install-mobile-bundle.mjs"), "utf8");
-	assert.ok(script.includes(`?? "v${manifest.version}"`),
-		"the installer's default tag has to be the current release, not a stale one");
+	// The default tag must name the latest *published release*, not the
+	// in-development package version: the Markdown tarball is served from
+	// release assets, so a version that exists only as a version-bump
+	// commit on main has no download URL and the installer would 404.
+	// Bump this literal when a newer release is actually published.
+	assert.ok(script.includes('?? "v1.0.3"'),
+		"the installer's default tag has to be the latest published release, not a stale or unreleased one");
 	assert.ok(script.includes('"github:kuraneko1/dsh-mobile-maxxing#" + tag'),
 		"the main package is pinned to the tag even when DSH_BUNDLE_TAG is not set");
 	assert.doesNotMatch(script, /DSH_BUNDLE_TAG \? "#" \+ tag : ""/,
