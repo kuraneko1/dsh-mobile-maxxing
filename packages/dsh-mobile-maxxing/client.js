@@ -15470,19 +15470,11 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
        row and pushed the second tab into the overflow menu. Only the title
        row's inner 28px changes, and the crumb takes the free space with auto
        margins, which centres it on the screen rather than on the leading pad. */
+    /* The header keeps its 64px leading pad for the hamburger and the title
+       stays left-aligned right after it, the way upstream draws it. Only the
+       row's own 28px inner pad goes: with the sidebar as a drawer that slot is
+       empty, and the title ended up 92px from the edge instead of 64 (#145). */
     html[data-rdsh-device-mode="mobile"] header[data-window-drag]:has([data-conversation-header-leading]) [class*="_titleRow"] { padding-left: 0 !important; }
-    /* The leading pad (64px, reserved for a toggle that is a drawer here) and
-       the trailing chrome both pulled the title off the centre line. Auto
-       margins on the crumb split the row's free space instead, which puts it
-       back on the screen's centre without taking it out of flow. */
-    html[data-rdsh-device-mode="mobile"] header[data-window-drag]:has([data-conversation-header-leading]) [class*="_crumbs"] {
-      margin-left: auto !important; margin-right: auto !important;
-      min-width: 0;
-    }
-    /* A sibling with an auto margin would take that free space back. */
-    html[data-rdsh-device-mode="mobile"] header[data-window-drag]:has([data-conversation-header-leading]) [class*="_headerActions"] {
-      margin-left: 0 !important;
-    }
     [data-sidebar-right-panel] [data-dockkit-split]:has(> [data-dockkit-host][data-dockkit-column="1"]) {
       grid-template-columns: minmax(0, 1fr) !important;
       grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) !important;
