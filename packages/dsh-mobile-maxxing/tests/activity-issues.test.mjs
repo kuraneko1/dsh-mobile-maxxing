@@ -1932,3 +1932,17 @@ test("#82 the sort moves the rows themselves and lives in the phone sheet", () =
 	// The portal never holds the chips, so the app frame is never the popover.
 	assert.match(CLIENT, /if \(child\.querySelector\("\[data-rdsh-activity-chip\]"\) !== null\) continue;/, "the app frame can be taken for the popover");
 });
+
+test("#80 a running subagent chip from the 0.2.2 wording is still a chip", () => {
+	// 0.2.2 labels the running chip "実行中のサブエージェント1件" and the idle
+	// one "サブエージェント1件". The noun no longer opens the string, so the
+	// match closes on the counter instead of opening on the noun.
+	const running = chip("実行中のサブエージェント1件");
+	const idle = chip("サブエージェント1件");
+	const booted = boot({ services: {} });
+	decorateChips(booted, [running, idle]);
+	for (const control of [running, idle]) {
+		assert.equal(control.getAttribute("data-rdsh-activity-chip"), "subagent", `${control.getAttribute("aria-label")} was not recognised`);
+		assert.ok(control.querySelector("[data-rdsh-activity-icon]") !== null, `${control.getAttribute("aria-label")} got no icon`);
+	}
+});

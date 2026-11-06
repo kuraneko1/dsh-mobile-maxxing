@@ -6517,17 +6517,36 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const nouns = probeValues("activityChipCountLast");
       const counters = probeValues("activityChipCounter");
       if (nouns.length === 0 || counters.length === 0) return new RegExp(`^${countFirst}`, "i");
+      // 0.2.2 labels a *running* subagent chip "実行中のサブエージェント1件" and
+      // the idle one "サブエージェント1件": the noun no longer starts the
+      // string. Anchor the closing counter instead of the opening noun, so a
+      // status word may precede it. A bare noun, a verb phrase, or a label whose
+      // count is not followed by its counter still do not match.
       const countLast = `(?:${nouns.join("|")})\\s*\\d[\\d,.]*\\s*(?:${counters.join("|")})$`;
-      return new RegExp(`^(?:${countFirst}|${countLast})`, "i");
+      return new RegExp(`(?:^${countFirst}|${countLast})`, "i");
     })();
 
     /** The subagent nouns, so a non-English label still picks the right glyph. */
     const ACTIVITY_SUBAGENT_PROBE = probeRegex("activitySubagentChip", "i", "subagent");
 
+    /** The header's count chips, by structure first and label second. */
     function headerActivityChips() {
-      if (ACTIVITY_CHIP_LABEL === null) return [];
-      return [...document.querySelectorAll("header button[aria-label]")]
-        .filter((button) => ACTIVITY_CHIP_LABEL.test((button.getAttribute("aria-label") || "").trim()));
+      const found = new Set();
+      // 0.2.2 translates the chips itself, and its wording changed twice in one
+      // release ("3 件のサブエージェントが実行中" -> "実行中のサブエージェント3件").
+      // The two chips are the only controls in the header's actions slot that
+      // are a disclosure: the subagent catalog opens a tree, the job list
+      // toggles a popover. Identify them by that, and keep the label rule as a
+      // fallback for a shell that names them differently.
+      for (const slot of document.querySelectorAll('header [data-slot="conversation.session.header.actions"]')) {
+        for (const button of slot.querySelectorAll('button[aria-haspopup="tree"], button[aria-expanded]:not([aria-haspopup])')) found.add(button);
+      }
+      if (ACTIVITY_CHIP_LABEL !== null) {
+        for (const button of document.querySelectorAll("header button[aria-label]")) {
+          if (ACTIVITY_CHIP_LABEL.test((button.getAttribute("aria-label") || "").trim())) found.add(button);
+        }
+      }
+      return [...found];
     }
 
     function activityChipOf(target) {
@@ -6621,15 +6640,21 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       let runningAny = false;
       for (const button of buttons) {
         const label = button.getAttribute("aria-label") || "";
-        const kind = ACTIVITY_SUBAGENT_PROBE !== null && ACTIVITY_SUBAGENT_PROBE.test(label) ? "subagent" : "shell";
-        button.setAttribute("data-rdsh-activity-chip", kind);
+        // The structure says which chip it is even when the wording does not.
+        const kind = button.getAttribute("aria-haspopup") === "tree"
+          || (ACTIVITY_SUBAGENT_PROBE !== null && ACTIVITY_SUBAGENT_PROBE.test(label))
+          ? "subagent" : "shell";
+        // Writes are compared first: this pass also runs straight from the
+        // MutationObserver, and an unconditional set would invalidate style on
+        // every unrelated mutation.
+        if (button.getAttribute("data-rdsh-activity-chip") !== kind) button.setAttribute("data-rdsh-activity-chip", kind);
         const projected = kind === "subagent" ? state.subagent : state.shell;
         const running = projected === null
           ? ACTIVITY_RUNNING_PROBE !== null && ACTIVITY_RUNNING_PROBE.test(label)
           : projected > 0;
         runningAny = runningAny || running;
-        button.setAttribute("data-rdsh-activity-state", running ? "running" : "idle");
-        button.toggleAttribute("data-rdsh-activity-running", running);
+        if (button.getAttribute("data-rdsh-activity-state") !== (running ? "running" : "idle")) button.setAttribute("data-rdsh-activity-state", running ? "running" : "idle");
+        if (button.hasAttribute("data-rdsh-activity-running") !== running) button.toggleAttribute("data-rdsh-activity-running", running);
         ensureActivityRing(button);
         if (button.querySelector("[data-rdsh-activity-icon]") === null) {
           const icon = document.createElement("span");
@@ -16756,7 +16781,13 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           clearPhoneHooks();
         }
 
-        const observer = new MutationObserver(scheduleDecorate);
+        const observer = new MutationObserver(() => {
+          // A live chip can be mounted (and unmounted) between two decorate
+          // passes; iconify it on the mutation that created it, so the raw
+          // "サブエージェント 1件" label is never what the user sees.
+          if (phone()) decorateHeaderActivityChips();
+          scheduleDecorate();
+        });
         // `data-sidebar-collapsed` / `data-rightbar-collapsed` are upstream's
         // own open/close signals on the app frame. They change without a
         // resize when the user toggles a sidebar, so without them the drawer
