@@ -531,3 +531,15 @@ test("the hamburger answers the touch, not a click the edge claim may eat", () =
 	assert.match(CLIENT, /fab\.addEventListener\("touchmove"/, "a drag is not a tap");
 	assert.match(CLIENT, /if \(Date\.now\(\) - fabActedAt < 500\) return;/, "the click repeats the touchend action");
 });
+
+test("the update confirmation stays until it is dismissed", () => {
+	assert.match(CLIENT, /const UPDATE_DONE_KEY = "dsh-mobile-maxxing:update-done";/, "the done marker is named");
+	assert.match(CLIENT, /sessionStorage\.setItem\(UPDATE_DONE_KEY, release\)/, "a finished update is remembered across the remount");
+	assert.match(CLIENT, /sessionStorage\.removeItem\(UPDATE_DONE_KEY\)/, "dismissing clears it");
+});
+
+test("the updates panel shows both versions without checking GitHub", () => {
+	assert.match(CLIENT, /plugin-version\?local=1/, "the versions come from the cheap route");
+	assert.match(CLIENT, /t\("update\.row\.plugin"\)/, "the plugin version row");
+	assert.match(CLIENT, /t\("update\.row\.dsh"\)/, "the DSH version row");
+});

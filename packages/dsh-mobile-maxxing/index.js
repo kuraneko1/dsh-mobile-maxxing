@@ -36,7 +36,8 @@ import { COPY, PROBES, copyFor, serviceWorkerCopy } from "./lib/copy.js";
 import { copyTable } from "./lib/copy-source.js";
 import { MANIFEST_FILE, MODE_GLOBAL, earlyModeScript } from "./lib/device-mode.js";
 import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import { spawn } from "node:child_process";
 
@@ -461,6 +462,26 @@ async function runPluginUpdate(profile, tag) {
 	}
 }
 
+/** The DSH version this process runs, for the Updates panel (#145). */
+export function dshVersion(argv = process.argv) {
+	// The running CLI is the one truth: <dsh>/lib/bin.js next to <dsh>/package.json.
+	const entry = Array.isArray(argv) ? argv[1] : undefined;
+	if (typeof entry === "string" && entry !== "") {
+		for (const candidate of [resolvePath(entry, "../package.json"), resolvePath(entry, "../../package.json")]) {
+			try {
+				const pkg = JSON.parse(readFileSync(candidate, "utf8"));
+				if (pkg && pkg.name === "@deepseek-ai/dsh" && typeof pkg.version === "string") return pkg.version;
+			} catch { /* try the next shape */ }
+		}
+	}
+	// An embedded install (no bin.js) still resolves if it depends on DSH.
+	try {
+		const pkg = createRequire(import.meta.url)("@deepseek-ai/dsh/package.json");
+		if (pkg && typeof pkg.version === "string") return pkg.version;
+	} catch { /* nothing to report */ }
+	return "";
+}
+
 export const RELEASE_URL = "https://github.com/kuraneko1/dsh-mobile-maxxing/releases";
 const RELEASE_API = "https://api.github.com/repos/kuraneko1/dsh-mobile-maxxing/releases/latest";
 
@@ -522,11 +543,18 @@ export function apply(ctx, config) {
         try {
           checkedRelease = null;
           const pkg = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
+          const dsh = dshVersion();
+          // ?local=1 answers the versions only: the Updates panel shows them
+          // the moment it opens, without a GitHub round trip.
+          if (/[?&]local=1(&|$)/.test(req.url || "")) {
+            respond(res, req.method, 200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }, JSON.stringify({ current: pkg.version, dsh }));
+            return;
+          }
           const latest = await fetchLatestRelease();
           const comparison = compareReleaseVersions(pkg.version, latest);
           const available = comparison < 0;
           checkedRelease = available ? latest : null;
-          respond(res, req.method, 200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }, JSON.stringify({ current: pkg.version, latest, available, ahead: comparison > 0, repository: RELEASE_URL }));
+          respond(res, req.method, 200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }, JSON.stringify({ current: pkg.version, dsh, latest, available, ahead: comparison > 0, repository: RELEASE_URL }));
         } catch (error) {
           respond(res, req.method, 502, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }, JSON.stringify({ error: String(error?.message || error) }));
         }

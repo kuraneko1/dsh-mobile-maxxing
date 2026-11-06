@@ -783,3 +783,19 @@ test("a missing CLI is named as such, not as a raw spawn error", async () => {
     process.env.PATH = oldPath;
   }
 });
+
+test("the versions answer without a GitHub round trip", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ tag_name: "v9.9.9" }) });
+  try {
+    const { routes } = mount({});
+    const local = await call(routes.get("/dsh-mobile-maxxing/plugin-version"), "GET", "/dsh-mobile-maxxing/plugin-version?local=1");
+    assert.equal(local.status, 200);
+    const body = JSON.parse(local.text);
+    assert.equal(typeof body.current, "string");
+    assert.equal(typeof body.dsh, "string");
+    assert.equal(body.latest, undefined, "the local answer still called GitHub");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

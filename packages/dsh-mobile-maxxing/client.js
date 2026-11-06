@@ -574,6 +574,8 @@ window.__ModuleLoader__.load({
     const ROOT_ATTR = "data-dsh-mobile-maxxing";
     const UPDATE_POLL_MS = 30 * 60 * 1000;
     const UPDATE_MIN_GAP_MS = 5 * 60 * 1000;
+    /** Survives the HMR remount that follows a successful plugin swap. */
+    const UPDATE_DONE_KEY = "dsh-mobile-maxxing:update-done";
     /** Failure codes the host sends; each has a "update.reason/hint.<code>" pair. */
     const UPDATE_FAILURES = new Set(["cli-missing", "network", "timeout", "release-missing", "permission", "disk", "busy", "unknown"]);
     const INSTALL_PROMPT_KEY = "dsh-mobile-maxxing:install-prompt-dismissed";
@@ -1266,9 +1268,35 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     globalThis.__RDSH_PWA_SETTINGS_SECTION__ = PwaSettingsSection;
 
     function UpdateSettingsSection() {
-      const [phase, setPhase] = useState("");
       const { createPortal } = require("react-dom");
-      const [release, setRelease] = useState("");
+      // A finished update stays on screen until the user dismisses it. The
+      // plugin swap remounts this tree (HMR), so the "done" state has to
+      // survive a remount: otherwise the confirmation vanished before it could
+      // be read.
+      const doneStored = (() => { try { return sessionStorage.getItem(UPDATE_DONE_KEY) || ""; } catch { return ""; } })();
+      const [phase, setPhase] = useState(doneStored !== "" ? "done" : "");
+      const [release, setRelease] = useState(doneStored);
+      const dismiss = () => {
+        try { sessionStorage.removeItem(UPDATE_DONE_KEY); } catch { /* private mode */ }
+        dismiss();
+      };
+      // The plugin and DSH versions are shown before any check runs, so the
+      // panel answers "what am I running?" without a GitHub round trip.
+      const [versions, setVersions] = useState({ plugin: "", dsh: "" });
+      useEffect(() => {
+        let active = true;
+        fetch("/dsh-mobile-maxxing/plugin-version?local=1", { cache: "no-store" })
+          .then((response) => (response.ok ? response.json() : null))
+          .then((data) => {
+            if (!active || data === null) return;
+            setVersions({
+              plugin: typeof data.current === "string" ? data.current : "",
+              dsh: typeof data.dsh === "string" ? data.dsh : "",
+            });
+          })
+          .catch(() => {});
+        return () => { active = false; };
+      }, []);
       // A failure the user can act on: a localised reason, what to do, and the
       // installer output as secondary detail. The server sends a stable code;
       // anything it does not know becomes "unknown" rather than raw stderr.
@@ -1312,6 +1340,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             setPhase("install-error");
             return;
           }
+          try { sessionStorage.setItem(UPDATE_DONE_KEY, release); } catch { /* private mode */ }
+          setVersions((previous) => ({ ...previous, plugin: release.replace(/^v/, "") }));
           setPhase("done");
         } catch (reason) { setFailure(offlineFailure(reason)); setPhase("install-error"); }
       };
@@ -1319,12 +1349,17 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return h("section", { className: "dsh-mobile-maxxing-section" },
         h("div", { className: "dsh-mobile-maxxing-cardbox" },
           h("h3", { className: "dsh-mobile-maxxing-title" }, t("tab.update")),
+          h("dl", { className: "dsh-mobile-maxxing-rows rdsh-update-versions" },
+            h("dt", null, t("update.row.plugin")),
+            h("dd", null, versions.plugin !== "" ? versions.plugin : "—"),
+            h("dt", null, t("update.row.dsh")),
+            h("dd", null, versions.dsh !== "" ? versions.dsh : "—")),
           h("button", { type: "button", className: "rdsh-update-launch", onClick: () => setPhase("confirm") },
             h("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
               h("path", { d: "M20 7v5h-5M4 17v-5h5" }),
               h("path", { d: "M5.6 9A7 7 0 0 1 18 6l2 1M4 17l2 1a7 7 0 0 0 12.4-3" })),
             t("pwa.action.check"))),
-        phase !== "" ? createPortal(h("div", { className: "rdsh-update-overlay", role: "dialog", "aria-modal": "true", "aria-labelledby": "rdsh-update-heading", onKeyDown: (event) => { if (event.key === "Escape" && !busy) setPhase(""); if (event.key === "Tab") { const nodes = [...event.currentTarget.querySelectorAll("a[href], button:not([disabled])")]; if (!nodes.length) { event.preventDefault(); return; } const first = nodes[0]; const last = nodes[nodes.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } } } },
+        phase !== "" ? createPortal(h("div", { className: "rdsh-update-overlay", role: "dialog", "aria-modal": "true", "aria-labelledby": "rdsh-update-heading", onKeyDown: (event) => { if (event.key === "Escape" && !busy) dismiss(); if (event.key === "Tab") { const nodes = [...event.currentTarget.querySelectorAll("a[href], button:not([disabled])")]; if (!nodes.length) { event.preventDefault(); return; } const first = nodes[0]; const last = nodes[nodes.length - 1]; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); } } } },
           h("div", { className: "rdsh-update-dialog" },
             (phase === "latest" || phase === "ahead" || phase === "done") ? h("svg", { className: "rdsh-update-check", viewBox: "0 0 64 64", fill: "none", "aria-hidden": "true" },
               h("circle", { cx: 32, cy: 32, r: 29, stroke: "currentColor", strokeWidth: 3 }),
@@ -1341,11 +1376,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
                 h("pre", null, failure.detail)) : null) : null,
             busy ? h("div", { className: "rdsh-update-spinner", role: "status", "aria-label": t(phase === "checking" ? "update.checking" : "update.installing") }) : null,
             !busy ? h("div", { className: "rdsh-update-actions" },
-              phase === "confirm" ? h("button", { type: "button", onClick: () => setPhase("") }, t("update.no")) : null,
+              phase === "confirm" ? h("button", { type: "button", onClick: () => dismiss() }, t("update.no")) : null,
               phase === "confirm" ? h("button", { type: "button", autoFocus: true, onClick: () => void checkRelease() }, t("update.yes")) : null,
-              phase === "available" ? h("button", { type: "button", onClick: () => setPhase("") }, t("update.cancel")) : null,
+              phase === "available" ? h("button", { type: "button", onClick: () => dismiss() }, t("update.cancel")) : null,
               phase === "available" ? h("button", { type: "button", autoFocus: true, onClick: () => void installRelease() }, t("update.install")) : null,
-              !["confirm", "available"].includes(phase) ? h("button", { type: "button", autoFocus: true, onClick: () => setPhase("") }, t("update.close")) : null) : null)), document.body) : null);
+              !["confirm", "available"].includes(phase) ? h("button", { type: "button", autoFocus: true, onClick: () => dismiss() }, t("update.close")) : null) : null)), document.body) : null);
     }
     globalThis.__RDSH_PWA_UPDATE_SECTION__ = UpdateSettingsSection;
 
@@ -15425,6 +15460,29 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     }
   }
   @media (orientation: portrait) and (max-width: 767px) {
+    /* #145: the header reserves a 64px leading pad for a sidebar toggle that is
+       a drawer on a phone, so the strip stays empty and the session title
+       floats off centre (28px at 390px wide, more on a narrower phone). Take
+       the padding over and centre the cluster between the hamburger and the
+       corner control. Scoped to the conversation's own header: dockkit reuses
+       data-window-drag on the right panel's tab strip. */
+    /* Leave the header's own padding alone: shrinking it also narrows the tab
+       row and pushed the second tab into the overflow menu. Only the title
+       row's inner 28px changes, and the crumb takes the free space with auto
+       margins, which centres it on the screen rather than on the leading pad. */
+    html[data-rdsh-device-mode="mobile"] header[data-window-drag]:has([data-conversation-header-leading]) [class*="_titleRow"] { padding-left: 0 !important; }
+    /* The leading pad (64px, reserved for a toggle that is a drawer here) and
+       the trailing chrome both pulled the title off the centre line. Auto
+       margins on the crumb split the row's free space instead, which puts it
+       back on the screen's centre without taking it out of flow. */
+    html[data-rdsh-device-mode="mobile"] header[data-window-drag]:has([data-conversation-header-leading]) [class*="_crumbs"] {
+      margin-left: auto !important; margin-right: auto !important;
+      min-width: 0;
+    }
+    /* A sibling with an auto margin would take that free space back. */
+    html[data-rdsh-device-mode="mobile"] header[data-window-drag]:has([data-conversation-header-leading]) [class*="_headerActions"] {
+      margin-left: 0 !important;
+    }
     [data-sidebar-right-panel] [data-dockkit-split]:has(> [data-dockkit-host][data-dockkit-column="1"]) {
       grid-template-columns: minmax(0, 1fr) !important;
       grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) !important;

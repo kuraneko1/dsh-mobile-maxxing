@@ -21,3 +21,12 @@ test("every code has a reason and a hint", () => {
 		assert.ok(failure.hint.length > 0, key + " has no hint");
 	}
 });
+import { dshVersion } from "../index.js";
+
+test("the DSH version comes from the running entry", () => {
+	const cli = "/home/ryu/.dsh-latest/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js";
+	const value = dshVersion(["node", cli]);
+	assert.equal(typeof value, "string");
+	// A path that is not a DSH install reports nothing rather than guessing.
+	assert.equal(dshVersion(["node", "/nonexistent/bin.js"]), "");
+});
