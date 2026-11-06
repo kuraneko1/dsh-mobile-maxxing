@@ -554,3 +554,34 @@ test("closing the update dialog actually closes it", () => {
 	assert.match(body, /setPhase\(""\)/, "dismiss does not clear the phase");
 	assert.doesNotMatch(body, /dismiss\(\)/, "dismiss calls itself");
 });
+
+test("dismissing the update dialog runs: it clears the marker and the phase", () => {
+	// The guard above only reads the source. This one runs it: slice the real
+	// dismiss out of the bundle and call it, because the v1.0.4 body recursed
+	// (dismiss calling dismiss) and reading the text is what let that ship.
+	const body = slice("const dismiss = () => {", "};") + "};";
+	const removed = [];
+	const phases = [];
+	const sandbox = {
+		UPDATE_DONE_KEY: "dsh-mobile-maxxing:update-done",
+		sessionStorage: { removeItem: (key) => removed.push(key) },
+		setPhase: (phase) => phases.push(phase),
+	};
+	vm.runInNewContext(body + "\nthis.dismiss = dismiss;", sandbox);
+	assert.doesNotThrow(() => sandbox.dismiss(), "dismiss must not throw (v1.0.4 threw RangeError)");
+	assert.deepEqual(removed, ["dsh-mobile-maxxing:update-done"], "dismiss clears the stored done marker");
+	assert.deepEqual(phases, [""], "dismiss closes the dialog by clearing the phase");
+});
+
+test("dismissing the update dialog still closes it when storage refuses", () => {
+	const body = slice("const dismiss = () => {", "};") + "};";
+	const phases = [];
+	const sandbox = {
+		UPDATE_DONE_KEY: "dsh-mobile-maxxing:update-done",
+		sessionStorage: { removeItem: () => { throw new Error("private mode"); } },
+		setPhase: (phase) => phases.push(phase),
+	};
+	vm.runInNewContext(body + "\nthis.dismiss = dismiss;", sandbox);
+	assert.doesNotThrow(() => sandbox.dismiss(), "a storage failure must not break dismiss");
+	assert.deepEqual(phases, [""], "the dialog closes even when the marker cannot be cleared");
+});
