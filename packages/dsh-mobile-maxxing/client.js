@@ -14288,19 +14288,78 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       };
       // Boot restores its own session after ours, so keep asserting until the
       // chat shows the one that was asked for, then stop.
+      // A boot restore is re-asserted, not repeated forever: 1.5s apart, only
+      // while the page is visible, and never more than ten times. The old 500ms
+      // loop hammered a session whose open was already in flight.
+      let attempts = 0;
       const timer = setInterval(() => {
         if (wantedSession === "") return;
+        if (document.visibilityState !== "visible") return;
         if (shownSessionId() === wantedSession) {
           wantedSession = "";
           return;
         }
-        if (Date.now() > wantedUntil) {
+        if (Date.now() > wantedUntil || attempts >= 10) {
           wantedSession = "";
           return;
         }
+        attempts += 1;
         sessionOpener?.();
-      }, 500);
+      }, 1500);
       scope.effect?.(() => () => clearInterval(timer));
+
+      // ---------------------------------------------------------------------
+      // A session whose open never answers (#145)
+      //
+      // Upstream's `doOpen` awaits the first journal frame with no deadline,
+      // and `open()` hands back the same promise forever, so a request lost on
+      // a half-open socket leaves "履歴を読み込み中…" on screen until the socket
+      // generation restarts (iOS retires one whenever the PWA is suspended).
+      // The only lever is `resync()`, which drops that promise and opens cold;
+      // without it, restarting the generation is what the browser does for a
+      // real network change.
+      // ---------------------------------------------------------------------
+      const stalled = new Map();
+      const STALL_MS = 8000;
+      const openStateOf = (id) => {
+        try {
+          return sessions?.manager?.get?.(id)?.getSnapshot?.()?.openState ?? "";
+        } catch {
+          return "";
+        }
+      };
+      const recoverSession = (id) => {
+        try {
+          const instance = sessions?.manager?.get?.(id);
+          if (typeof instance?.resync === "function") {
+            void instance.resync();
+            return;
+          }
+        } catch {
+          /* no handle: fall through to the generation restart */
+        }
+        try {
+          window.dispatchEvent(new Event("offline"));
+          setTimeout(() => window.dispatchEvent(new Event("online")), 1200);
+        } catch {
+          /* a page without events has nothing left to try */
+        }
+      };
+      const stallTimer = setInterval(() => {
+        if (!phone() || document.visibilityState !== "visible") return;
+        const id = shownSessionId();
+        if (id === "") return;
+        if (openStateOf(id) !== "loading") {
+          stalled.delete(id);
+          return;
+        }
+        const entry = stalled.get(id) ?? { since: Date.now(), tried: false };
+        stalled.set(id, entry);
+        if (entry.tried || Date.now() - entry.since < STALL_MS) return;
+        entry.tried = true;
+        recoverSession(id);
+      }, 2000);
+      scope.effect?.(() => () => clearInterval(stallTimer));
     }
 
     /** Read `?session=` once, then drop it from the address bar. */

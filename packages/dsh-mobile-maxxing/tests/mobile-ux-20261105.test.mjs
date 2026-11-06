@@ -554,3 +554,20 @@ test("closing the update dialog actually closes it", () => {
 	assert.match(body, /setPhase\(""\)/, "dismiss does not clear the phase");
 	assert.doesNotMatch(body, /dismiss\(\)/, "dismiss calls itself");
 });
+
+test("a session stuck opening is resynced once, not left loading", () => {
+	// Upstream's open() has no deadline and keeps returning the same promise, so
+	// a lost request leaves "loading" forever. The watchdog is the only lever:
+	// resync() drops that promise, or the socket generation is restarted.
+	assert.match(CLIENT, /const STALL_MS = 8000;/, "the stall window is declared");
+	assert.match(CLIENT, /openStateOf\(id\) !== "loading"/, "the watchdog reads the open state");
+	assert.match(CLIENT, /typeof instance\?\.resync === "function"/, "resync is the first lever");
+	assert.match(CLIENT, /window\.dispatchEvent\(new Event\("offline"\)\)/, "the generation restart is the fallback");
+	assert.match(CLIENT, /scope\.effect\?\.\(\(\) => \(\) => clearInterval\(stallTimer\)\)/, "the watchdog dies with the boot");
+});
+
+test("the boot restore re-asserts slowly enough to stop", () => {
+	assert.match(CLIENT, /\}, 1500\);/, "the re-assert interval is 1.5s");
+	assert.match(CLIENT, /attempts >= 10/, "the loop is capped");
+	assert.match(CLIENT, /document\.visibilityState !== "visible"\) return;/, "a hidden page stops re-asserting");
+});
