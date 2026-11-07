@@ -3700,6 +3700,24 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       saveFrameMap(FOLDER_FRAME_KEY, folderFrames, workspaceId, color);
     }
 
+    /**
+     * Tag the sidebar list that holds a running (ringed) row.
+     *
+     * iOS Safari painted nothing for a ringed row, not its fill, name or ring,
+     * while the list was too short to scroll; once the list overflowed, the
+     * same row painted. The list is only tagged data-rdsh-scroll when it
+     * overflows, so it is found from the row: the nearest ancestor whose
+     * CSS-module class ends in "_list".
+     */
+    function markRingList() {
+      const ringed = document.querySelector("[data-rdsh-sidebar] [data-rdsh-ring-row]");
+      const list = ringed?.closest("[data-rdsh-scroll]") ?? ringed?.parentElement?.closest('[class$="_list"], [class*="_list "]') ?? null;
+      for (const tagged of document.querySelectorAll("[data-rdsh-ring-list]")) {
+        if (tagged !== list) tagged.removeAttribute("data-rdsh-ring-list");
+      }
+      if (list !== null && !list.hasAttribute("data-rdsh-ring-list")) list.setAttribute("data-rdsh-ring-list", "");
+    }
+
     function decorateSessionRows() {
       // #44: every session-row hook, including the colour frame, dresses the
       // mobile sidebar. Desktop keeps upstream's rows untouched; the frame
@@ -3737,6 +3755,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const actions = children.find((child) => classToken(child, /_rowActions$/));
         if (actions) decorateRowActions(actions);
       }
+      markRingList();
       // Real Workspace headers carry the same colour frame. The key is the
       // stable Workspace id, so rename, expand/collapse and reorder keep it;
       // the Ungrouped bucket ("workspace:") is not a folder and is skipped.
@@ -3775,6 +3794,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     const SESSION_ROW_HOOKS = [
       "data-rdsh-running",
       "data-rdsh-ring-row",
+      "data-rdsh-ring-list",
       "data-rdsh-open-row",
       "data-rdsh-session-frame",
       "data-rdsh-folder-frame",
@@ -15369,6 +15389,13 @@ html[data-rdsh-anim="outline"] [data-rdsh-ring-row]::after {
 html[data-rdsh-anim="outline"] [data-rdsh-ring-row] > * {
   position: relative;
   z-index: 1;
+}
+/* iOS Safari painted a ringed row as nothing at all while the sidebar list
+   was too short to scroll, and painted it once the list overflowed (a
+   scrolling list is its own composited layer). Giving the list that layer
+   unconditionally makes the short list paint the same way. */
+html[data-rdsh-anim="outline"] [data-rdsh-ring-list] {
+  will-change: transform;
 }
 /* Yellow only while a running session is also the open one. */
 html[data-rdsh-anim="outline"] [data-rdsh-ring-row][aria-selected="true"] {
