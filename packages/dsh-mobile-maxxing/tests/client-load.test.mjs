@@ -583,6 +583,8 @@ test("tapping a New session button on a phone closes the drawer", () => {
 	// Reviewed ja labels: the stock sidebar action and a workspace's "+".
 	assert.equal(drawerClosedAfterTapping("新しいセッションを作成"), true, "ja sidebar button");
 	assert.equal(drawerClosedAfterTapping("my-repo で新しいセッション"), true, "ja workspace button");
+	// DSH 0.2.2 ships its own ja copy; its sidebar button and brand row say this.
+	assert.equal(drawerClosedAfterTapping("新規セッション"), true, "DSH 0.2.2 ja sidebar button");
 });
 
 test("other buttons leave the drawer open, and so does a wide screen", () => {
