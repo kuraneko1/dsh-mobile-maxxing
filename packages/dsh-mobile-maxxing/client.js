@@ -8004,8 +8004,27 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (more.textContent !== label) more.textContent = label;
     }
 
+    /**
+     * Put the soft keyboard away when the drawer is toggled.
+     *
+     * The hamburger acts on its own cancelled touchend and the edge swipe
+     * cancels its touchmove, so the browser never moves focus off the
+     * composer: iOS Safari kept the keyboard up over the opening drawer. Only
+     * a field outside the drawer is let go; the drawer's own session search
+     * keeps its keyboard (#142). Clearing the deliberate-focus mark keeps the
+     * app from bringing the keyboard back by refocusing the same field.
+     */
+    function dismissKeyboardForDrawer() {
+      if (!phone()) return;
+      const field = textBoxOf(document.activeElement);
+      if (field === null || field.closest("[data-rdsh-sidebar]") !== null) return;
+      if (allowFocusElement === field) allowFocusElement = null;
+      field.blur();
+    }
+
     function toggleDrawer() {
       drawerRouteClosed = false;
+      dismissKeyboardForDrawer();
       // Share the decorator's locator so a localised label still opens the
       // drawer; the stock global label is only the fallback for a route with
       // no sidebar slot.

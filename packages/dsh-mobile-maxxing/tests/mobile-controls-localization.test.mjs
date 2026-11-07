@@ -30,6 +30,8 @@ function functionSource(name) {
 const sidebarSource = functionSource("sidebarToggle");
 const decorateSource = functionSource("decorateSidebarToggle");
 const toggleSource = functionSource("toggleDrawer");
+// The drawer action puts the composer's keyboard away first.
+const dismissSource = functionSource("dismissKeyboardForDrawer");
 const closeSource = functionSource("closeDrawer");
 // #134: closeDrawer records the closed drawer marker through this shared helper.
 const closedSource = functionSource("markDrawerClosed");
@@ -65,6 +67,16 @@ function element(tagName, attributes = {}) {
 		},
 		click() {
 			this.clicks += 1;
+		},
+		blurs: 0,
+		blur() {
+			this.blurs += 1;
+		},
+		closest(selector) {
+			for (let node = this; node !== undefined && node !== null; node = node.parentNode) {
+				if (typeof node.hasAttribute === "function" && matches(node, selector)) return node;
+			}
+			return null;
 		},
 		querySelector(selector) {
 			return query(this, selector, true);
@@ -114,12 +126,13 @@ function query(root, selector, first) {
  * Run the four extracted functions against a body that may hold a sidebar and
  * same-labelled controls outside it.
  */
-function load({ sidebar = null, globals = [], phone = true, frameElement = null } = {}) {
+function load({ sidebar = null, globals = [], phone = true, frameElement = null, active = null } = {}) {
 	const body = element("body");
 	if (sidebar !== null) body.append(sidebar);
 	for (const control of globals) body.append(control);
 	const document = {
 		documentElement: element("html"),
+		activeElement: active,
 		querySelector(selector) {
 			return body.querySelector(selector);
 		},
@@ -140,13 +153,15 @@ function load({ sidebar = null, globals = [], phone = true, frameElement = null 
 		state: { drawerOpen: true },
 		emit() {},
 		scheduleDecorate() {},
+		// Only nodes marked as text fields count, like the real textBoxOf.
+		textBoxOf: (node) => (node !== null && node !== undefined && node.hasAttribute("data-field") ? node : null),
 		probeValues: (key, fallback) => (Array.isArray(probes[key]) ? probes[key] : fallback === undefined ? [] : [fallback]),
 		ariaLabelSelector: (tag, key, fallback) => context.probeValues(key, fallback)
 			.map((value) => `${tag}[aria-label="${String(value).replaceAll('"', '\\"')}"]`)
 			.join(", "),
 	};
 	const api = vm.runInNewContext(
-		`(() => {\n${sidebarSource}\n${decorateSource}\n${toggleSource}\n${closeSource}\n${closedSource}\nreturn { sidebarToggle, decorateSidebarToggle, toggleDrawer, closeDrawer };\n})()`,
+		`(() => {\nlet allowFocusElement = null;\n${dismissSource}\n${sidebarSource}\n${decorateSource}\n${toggleSource}\n${closeSource}\n${closedSource}\nreturn { sidebarToggle, decorateSidebarToggle, toggleDrawer, closeDrawer };\n})()`,
 		context,
 	);
 	return { ...api, document, body };
@@ -292,4 +307,47 @@ test("a desktop pass removes the tag and adds none", () => {
 	const app = load({ sidebar: root, phone: false });
 	app.decorateSidebarToggle();
 	assert.equal(toggle.hasAttribute("data-rdsh-sidebar-toggle"), false);
+});
+
+// --------------------------------------------------------------------------
+// The hamburger puts the keyboard away. Its touchend is cancelled, so the
+// browser never moves focus off the composer by itself (iOS Safari kept the
+// keyboard up over the opening drawer).
+// --------------------------------------------------------------------------
+
+test("opening the drawer blurs the composer that holds the keyboard", () => {
+	const { root, header } = sidebar();
+	const toggle = button("Open sidebar", { icon: true });
+	header.append(toggle);
+	const composer = element("div", { "data-field": "" });
+	const app = load({ sidebar: root, globals: [composer], active: composer });
+	app.toggleDrawer();
+	assert.equal(composer.blurs, 1, "the composer kept its focus, so the keyboard stays up");
+	assert.equal(toggle.clicks, 1);
+});
+
+test("the drawer's own search keeps its keyboard", () => {
+	const { root, header } = sidebar();
+	const toggle = button("Open sidebar", { icon: true });
+	header.append(toggle);
+	const drawer = element("div", { "data-rdsh-sidebar": "" });
+	const search = element("input", { "data-field": "" });
+	drawer.append(root);
+	root.append(search);
+	const app = load({ sidebar: drawer, active: search });
+	app.toggleDrawer();
+	assert.equal(search.blurs, 0, "a field inside the drawer lost its keyboard (#142)");
+});
+
+test("a focused non-text control is left alone, and a desktop never blurs", () => {
+	const { root, header } = sidebar();
+	header.append(button("Open sidebar", { icon: true }));
+	const other = button("Something");
+	const app = load({ sidebar: root, globals: [other], active: other });
+	app.toggleDrawer();
+	assert.equal(other.blurs, 0);
+	const composer = element("div", { "data-field": "" });
+	const desktop = load({ sidebar: sidebar().root, globals: [composer], active: composer, phone: false });
+	desktop.toggleDrawer();
+	assert.equal(composer.blurs, 0, "a desktop window lost its focus");
 });
