@@ -5893,9 +5893,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // fallback is usually still being typed.
         const text = sessionTitleText(element);
         const previous = titleSeen.get(key);
-        if (text !== "") titleSeen.set(key, text);
-        else if (previous === undefined) titleSeen.set(key, "");
+        // An empty label is not a baseline: the list paints rows before the
+        // catalog resolves, and recording "" made the real title look like a
+        // change, so every reload retyped the drawer (#146).
         if (text === "") continue;
+        titleSeen.set(key, text);
         // First sight is the baseline: a page reload must not retype history.
         // A real title here also proves the row is named, so a later change to
         // it is a rename. An id or an untitled label is a placeholder: the real
@@ -7975,7 +7977,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // The search result set is upstream's own (bounded) list, not the
       // catalog: limiting it would hide matches the user is looking for.
       const search = sidebar.querySelector("input");
-      const paged = search === null || (search.value || "") === "";
+      // #146: the shell pages each workspace itself and already renders its own
+      // "show N more" row ("overflow:<workspace>"). Our flat page limit counted
+      // those rows too, so opening a project showed only the first page of its
+      // sessions and the workspace's own more row was hidden with them. Keep
+      // the limit for a flat recent list; leave a workspace list to the shell.
+      const grouped = sidebar.querySelector('[data-row-key^="workspace:"]') !== null;
+      const paged = (search === null || (search.value || "") === "") && !grouped;
       const rows = [...sidebar.querySelectorAll('[data-row-key^="session:"]')];
       rows.forEach((row, index) => {
         if (paged && index >= sessionLimit) row.setAttribute("data-rdsh-session-overflow", "");

@@ -571,3 +571,21 @@ test("the boot restore re-asserts slowly enough to stop", () => {
 	assert.match(CLIENT, /attempts >= 10/, "the loop is capped");
 	assert.match(CLIENT, /document\.visibilityState !== "visible"\) return;/, "a hidden page stops re-asserting");
 });
+
+test("an empty label never becomes the typing baseline", () => {
+	// The list paints rows before the catalog resolves. Recording "" as the
+	// baseline made the real title look like a change, so every reload retyped
+	// the drawer (#146).
+	const at = CLIENT.indexOf("const previous = titleSeen.get(key);");
+	assert.ok(at > 0, "the typing baseline is gone");
+	const body = CLIENT.slice(at, at + 600);
+	assert.match(body, /if \(text === ""\) continue;/, "an empty label is skipped");
+	assert.doesNotMatch(body, /titleSeen\.set\(key, ""\)/, "an empty label was stored as a baseline");
+});
+
+test("the flat page limit leaves a workspace's own paging alone", () => {
+	// The shell already pages each workspace and renders its own overflow row;
+	// hiding those rows with our limit made an opened project look incomplete.
+	assert.match(CLIENT, /const grouped = sidebar\.querySelector\('\[data-row-key\^="workspace:"\]'\) !== null;/, "the workspace case is detected");
+	assert.match(CLIENT, /const paged = \(search === null \|\| \(search\.value \|\| ""\) === ""\) && !grouped;/, "our limit steps aside for workspaces");
+});
