@@ -786,8 +786,10 @@ export const PROBES = {
 	activitySubagentChip: ["subagents", "subagent", "子智能体", "サブエージェント"],
 	/** Any aria-label that identifies the stats dock. */
 	stats: ["tok", "turns", "context", "ターン", "コンテキスト"],
-	/** A control that starts a new session (sidebar button, brand row, workspace "+"). */
-	newSession: ["new session", "新建会话", "中新建会话", "新しいセッション"],
+	/** A control that starts a new session (sidebar button, brand row, workspace "+").
+	 *  DSH 0.2.2's own ja copy labels the sidebar button "新規セッション";
+	 *  dsh-locale-ja says "新しいセッションを作成". */
+	newSession: ["new session", "新建会话", "中新建会话", "新しいセッション", "新規セッション"],
 	/** Labels of a session that has no name yet. */
 	untitled: ["new session", "new chat", "untitled", "新しいセッション", "新しいチャット", "無題", "未命名", "新会话"],
 	/** The right panel's "make this pane fullscreen" control. */
