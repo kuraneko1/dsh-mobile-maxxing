@@ -25,13 +25,16 @@ function functionSource(name) {
 	return source.slice(at, end + "\n    }".length);
 }
 
-const markSource = functionSource("markRingList");
+const markSource = functionSource("classToken") + "\n" + functionSource("markRingList");
 
 /** Just enough of an element for markRingList: attributes, class, parent. */
 function element(className = "", attributes = {}) {
 	const attrs = new Map(Object.entries(attributes));
 	const node = {
 		className,
+		get classList() {
+			return className.split(/\s+/).filter(Boolean);
+		},
 		parentElement: null,
 		children: [],
 		hasAttribute: (name) => attrs.has(name),
@@ -79,7 +82,8 @@ function all(root) {
  */
 function sidebar({ ringed = true, scrolls = false } = {}) {
 	const root = element("x_sidebarCol", { "data-rdsh-sidebar": "" });
-	const list = element("bhn1Oq_list", scrolls ? { "data-rdsh-scroll": "" } : {});
+	// The flat list renders as clsx(list, flatList): "…_list …_flatList".
+	const list = element("bhn1Oq_list bhn1Oq_flatList", scrolls ? { "data-rdsh-scroll": "" } : {});
 	const section = element("bhn1Oq_groupSection");
 	const wrapper = element("_root_bgejw_3");
 	const row = element("YDXeBa_sessionRow", ringed ? { "data-rdsh-ring-row": "" } : {});

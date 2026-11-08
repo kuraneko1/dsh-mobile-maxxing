@@ -3708,10 +3708,17 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * same row painted. The list is only tagged data-rdsh-scroll when it
      * overflows, so it is found from the row: the nearest ancestor whose
      * CSS-module class ends in "_list".
+     *
+     * Match the class *token*, not the attribute string: the flat list renders
+     * as "bhn1Oq_list bhn1Oq_flatList", so "[class$=_list]" never matches and
+     * "[class*=_list ]" only matched while the list happened to be first.
      */
     function markRingList() {
       const ringed = document.querySelector("[data-rdsh-sidebar] [data-rdsh-ring-row]");
-      const list = ringed?.closest("[data-rdsh-scroll]") ?? ringed?.parentElement?.closest('[class$="_list"], [class*="_list "]') ?? null;
+      let list = ringed?.closest("[data-rdsh-scroll]") ?? null;
+      for (let node = list === null ? ringed?.parentElement ?? null : null; node !== null && list === null; node = node.parentElement) {
+        if (classToken(node, /_list$/)) list = node;
+      }
       for (const tagged of document.querySelectorAll("[data-rdsh-ring-list]")) {
         if (tagged !== list) tagged.removeAttribute("data-rdsh-ring-list");
       }

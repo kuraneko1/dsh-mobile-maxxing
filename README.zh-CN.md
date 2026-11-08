@@ -41,7 +41,7 @@
 curl -fsSL https://raw.githubusercontent.com/kuraneko1/dsh-mobile-maxxing/main/scripts/install-mobile-bundle.mjs | node --input-type=module
 ```
 
-默认情况下，该操作会将组件安装至 `web` profile 中。其中，移动端主插件和日语语言包将安装各自仓库的 `main` 分支版本，Markdown 表格插件则安装 `v1.0.5` 发布中的 `0.1.3` 版本安装包。
+默认情况下，该操作会将组件安装至 `web` profile 中。其中，移动端主插件固定安装 `v1.0.5` 发布版本，日语语言包安装 `main` 分支版本，Markdown 表格插件则安装 `v1.0.5` 发布中的 `0.1.3` 版本安装包。
 安装完成后，请重启 DSH 并刷新浏览器页面。
 
 若需使用其他 profile：
@@ -160,7 +160,7 @@ v1.0.0 版本还增强了通知的可靠性与安全性：
 | 环境变量 | 用途 | 默认值 |
 | --- | --- | --- |
 | `DSH_PROFILE` | 安装目标 profile | `web` |
-| `DSH_BUNDLE_TAG` | 指定 Markdown 表格插件安装包所在的发布标签；显式设置时，移动端主插件也会使用相同的 Git 分支或标签 | `v1.0.5`（移动端主插件默认使用 `main`） |
+| `DSH_BUNDLE_TAG` | 指定 Markdown 表格插件安装包所在的发布标签；移动端主插件也会使用相同的 Git 分支或标签 | `v1.0.5`（移动端主插件也固定到该标签） |
 | `DSH_BUNDLE_BASE_URL` | Markdown 表格插件安装包的基础下载 URL | 指定发布标签对应的 GitHub Releases 下载地址 |
 | `DSH_LOCALE_REF` | 安装日语语言包时使用的 Git 分支或标签 | `main` |
 | `DSH_MD_VERSION` | Markdown 表格插件的版本号 | `0.1.3` |
@@ -175,7 +175,7 @@ DSH_MD_VERSION=0.1.3 \
   node scripts/install-mobile-bundle.mjs
 ```
 
-未设置 `DSH_BUNDLE_TAG` 时，移动端主插件直接从默认的 `main` 分支安装；显式设置后，则从该值对应的 Git 分支或标签安装。例如，上述配置会从 `v1.0.0` 标签安装移动端主插件。
+未设置 `DSH_BUNDLE_TAG` 时，移动端主插件与表格插件都固定安装该标签（`v1.0.5`）的发布版本；显式设置后，则从该值对应的 Git 分支或标签安装。
 
 若未自定义 `DSH_BUNDLE_BASE_URL`，指定的 GitHub Release 中必须包含与 `DSH_MD_VERSION` 对应的 Markdown 表格插件安装包，例如 `dsh-md-rendering-0.1.3.tgz`。
 

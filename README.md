@@ -40,7 +40,7 @@ CJK の自動リンク修正は、PC の描画を変えない方針のため、�
 curl -fsSL https://raw.githubusercontent.com/kuraneko1/dsh-mobile-maxxing/main/scripts/install-mobile-bundle.mjs | node --input-type=module
 ```
 
-既定では `web` プロファイルへ、本体と日本語化は各リポジトリの `main`、表表示は `v1.0.5` の `0.1.3` 成果物を導入します。
+既定では `web` プロファイルへ、本体はリリース `v1.0.5` に固定、日本語化は `main`、表表示は `v1.0.5` の `0.1.3` 成果物を導入します。
 導入後は DSH を再起動し、ブラウザを再読み込みしてください。
 
 別のプロファイルを使う場合:
@@ -159,7 +159,7 @@ v1.0.0 では、通知の信頼性と安全性も強化しています。
 | 環境変数 | 用途 | 既定 |
 | --- | --- | --- |
 | `DSH_PROFILE` | 導入先プロファイル | `web` |
-| `DSH_BUNDLE_TAG` | 本体を固定する Git ref と、表 tarball を含むリリースタグ | `v1.0.5`（本体は `main`） |
+| `DSH_BUNDLE_TAG` | 本体を固定する Git ref と、表 tarball を含むリリースタグ | `v1.0.5`（本体もこのタグに固定） |
 | `DSH_BUNDLE_BASE_URL` | 表 tarball のダウンロード元 | 指定タグの GitHub Releases |
 | `DSH_LOCALE_REF` | 日本語化を固定する Git ref | `main` |
 | `DSH_MD_VERSION` | 表パッケージの版 | `0.1.3` |
@@ -174,7 +174,7 @@ DSH_MD_VERSION=0.1.3 \
   node scripts/install-mobile-bundle.mjs
 ```
 
-`DSH_BUNDLE_TAG` を指定すると本体もその Git ref に固定されます。指定したリリースに、対応する表 tarball が必要です。
+本体は既定で `DSH_BUNDLE_TAG` のタグ（`v1.0.5`）に固定されます。`DSH_BUNDLE_TAG` を指定すると、本体と表 tarball の両方がその ref に切り替わります。指定したリリースに、対応する表 tarball が必要です。
 
 ## トラブルシューティング
 
