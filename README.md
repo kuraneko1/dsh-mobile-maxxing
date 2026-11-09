@@ -3,7 +3,7 @@
 DeepSeek Harness（DSH）の Web UI を、スマートフォンとタブレットで快適に使うためのプラグイン群です。
 PWA、モバイルレイアウト、通知、Markdown 表、日本語 UI を、必要なものだけ導入できます。
 
-**[最新リリース v1.0.5](https://github.com/kuraneko1/dsh-mobile-maxxing/releases/tag/v1.0.5)** · **[リリースノート](RELEASE-NOTES-v1.0.5.md)** · **[English](README.en.md)** · **[简体中文](README.zh-CN.md)**
+**[最新リリース v1.0.6](https://github.com/kuraneko1/dsh-mobile-maxxing/releases/tag/v1.0.6)** · **[リリースノート](RELEASE-NOTES-v1.0.6.md)** · **[English](README.en.md)** · **[简体中文](README.zh-CN.md)**
 
 - モバイル本体は素の DSH にそのまま導入でき、通知用の外部ライブラリも不要です。
 - 画面幅ではなく端末を判定するため、狭い PC ウィンドウやタッチ対応 Windows PC をモバイル扱いしません。
@@ -14,7 +14,7 @@ PWA、モバイルレイアウト、通知、Markdown 表、日本語 UI を、�
 
 | コンポーネント | 役割 | 現在の版 | ソース |
 | --- | --- | --- | --- |
-| `dsh-mobile-maxxing` | PWA、通知、モバイル UX | 1.0.5 | このリポジトリ |
+| `dsh-mobile-maxxing` | PWA、通知、モバイル UX | 1.0.6 | このリポジトリ |
 | `dsh-md-rendering` | モバイルの Markdown 表表示 | 0.1.3 | [kuraneko1/dsh-md-rendering](https://github.com/kuraneko1/dsh-md-rendering) / [`packages/dsh-md-rendering`](packages/dsh-md-rendering) |
 | `dsh-locale-ja` | 65名前空間・2915キーの日本語 UI | 0.1.2 | [kuraneko1/dsh-locale-ja](https://github.com/kuraneko1/dsh-locale-ja) / [`packages/dsh-locale-ja`](packages/dsh-locale-ja) |
 
@@ -40,7 +40,7 @@ CJK の自動リンク修正は、PC の描画を変えない方針のため、�
 curl -fsSL https://raw.githubusercontent.com/kuraneko1/dsh-mobile-maxxing/main/scripts/install-mobile-bundle.mjs | node --input-type=module
 ```
 
-既定では `web` プロファイルへ、本体はリリース `v1.0.5` に固定、日本語化は `main`、表表示は `v1.0.5` の `0.1.3` 成果物を導入します。
+既定では `web` プロファイルへ、本体はリリース `v1.0.6` に固定、日本語化は `main`、表表示は `v1.0.6` の `0.1.3` 成果物を導入します。
 導入後は DSH を再起動し、ブラウザを再読み込みしてください。
 
 別のプロファイルを使う場合:
@@ -64,7 +64,7 @@ dsh plugin --profile web add github:kuraneko1/dsh-locale-ja
 ### Markdown 表だけを追加
 
 ```sh
-dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v1.0.5/dsh-md-rendering-0.1.3.tgz
+dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v1.0.6/dsh-md-rendering-0.1.3.tgz
 ```
 
 `dsh plugin --profile web add` は依存と bundle の両方を更新します。`cd ~/.dsh/profiles/web` は不要です。
@@ -159,7 +159,7 @@ v1.0.0 では、通知の信頼性と安全性も強化しています。
 | 環境変数 | 用途 | 既定 |
 | --- | --- | --- |
 | `DSH_PROFILE` | 導入先プロファイル | `web` |
-| `DSH_BUNDLE_TAG` | 本体を固定する Git ref と、表 tarball を含むリリースタグ | `v1.0.5`（本体もこのタグに固定） |
+| `DSH_BUNDLE_TAG` | 本体を固定する Git ref と、表 tarball を含むリリースタグ | `v1.0.6`（本体もこのタグに固定） |
 | `DSH_BUNDLE_BASE_URL` | 表 tarball のダウンロード元 | 指定タグの GitHub Releases |
 | `DSH_LOCALE_REF` | 日本語化を固定する Git ref | `main` |
 | `DSH_MD_VERSION` | 表パッケージの版 | `0.1.3` |
@@ -168,13 +168,13 @@ v1.0.0 では、通知の信頼性と安全性も強化しています。
 
 ```sh
 DSH_PROFILE=web-mobile \
-DSH_BUNDLE_TAG=v1.0.5 \
+DSH_BUNDLE_TAG=v1.0.6 \
 DSH_LOCALE_REF=main \
 DSH_MD_VERSION=0.1.3 \
   node scripts/install-mobile-bundle.mjs
 ```
 
-本体は既定で `DSH_BUNDLE_TAG` のタグ（`v1.0.5`）に固定されます。`DSH_BUNDLE_TAG` を指定すると、本体と表 tarball の両方がその ref に切り替わります。指定したリリースに、対応する表 tarball が必要です。
+本体は既定で `DSH_BUNDLE_TAG` のタグ（`v1.0.6`）に固定されます。`DSH_BUNDLE_TAG` を指定すると、本体と表 tarball の両方がその ref に切り替わります。指定したリリースに、対応する表 tarball が必要です。
 
 ## トラブルシューティング
 
