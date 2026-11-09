@@ -548,9 +548,9 @@ test("closing the update dialog actually closes it", () => {
 	// The blanket setPhase("") -> dismiss() rewrite once replaced the body of
 	// dismiss() itself: closing recursed until the stack blew, and the dialog
 	// stayed on screen.
-	const start = CLIENT.indexOf("const dismiss = () => {");
-	assert.ok(start > 0, "the dialog has no dismiss");
-	const body = CLIENT.slice(start, CLIENT.indexOf("};", start));
+	// Read the update dialog's own dismiss (client.js carries a second one for
+	// the exit dialog) through the same anchored slice the executed tests use.
+	const body = updateDismissSource();
 	assert.match(body, /setPhase\(""\)/, "dismiss does not clear the phase");
 	assert.doesNotMatch(body, /dismiss\(\)/, "dismiss calls itself");
 });
@@ -588,4 +588,54 @@ test("the flat page limit leaves a workspace's own paging alone", () => {
 	// hiding those rows with our limit made an opened project look incomplete.
 	assert.match(CLIENT, /const grouped = sidebar\.querySelector\('\[data-row-key\^="workspace:"\]'\) !== null;/, "the workspace case is detected");
 	assert.match(CLIENT, /const paged = \(search === null \|\| \(search\.value \|\| ""\) === ""\) && !grouped;/, "our limit steps aside for workspaces");
+});
+
+/**
+ * The update dialog's own dismiss.
+ *
+ * client.js carries two `dismiss` definitions (the update dialog and the exit
+ * dialog), and the body may grow: anchor the slice to the update section and to
+ * its own closing brace instead of searching the whole bundle for "};".
+ */
+function updateDismissSource() {
+	const section = CLIENT.indexOf("function UpdateSettingsSection()");
+	assert.ok(section > 0, "the update settings section exists");
+	const at = CLIENT.indexOf("const dismiss = () => {", section);
+	assert.ok(at > section, "the update dialog has its own dismiss");
+	const end = CLIENT.indexOf("\n      };", at);
+	assert.ok(end > at, "the dismiss body is closed");
+	return CLIENT.slice(at, end) + "\n      };";
+}
+
+// Adapted from #141 (@sahenjp): the static guard above only reads the source.
+// These run the real dismiss, because reading the text is what let the v1.0.4
+// recursion ship.
+test("dismissing the update dialog runs: it clears the marker and the phase", () => {
+	const body = updateDismissSource();
+	const removed = [];
+	const phases = [];
+	const sandbox = {
+		UPDATE_DONE_KEY: "dsh-mobile-maxxing:update-done",
+		sessionStorage: { removeItem: (key) => removed.push(key) },
+		setPhase: (phase) => phases.push(phase),
+	};
+	vm.runInNewContext(body + "\nthis.dismiss = dismiss;", sandbox);
+	assert.equal(typeof sandbox.dismiss, "function", "the sliced dismiss did not evaluate");
+	assert.doesNotThrow(() => sandbox.dismiss(), "dismiss must not throw (v1.0.4 threw RangeError)");
+	assert.deepEqual(removed, ["dsh-mobile-maxxing:update-done"], "dismiss clears the stored done marker");
+	assert.deepEqual(phases, [""], "dismiss closes the dialog by clearing the phase");
+});
+
+test("dismissing the update dialog still closes it when storage refuses", () => {
+	const body = updateDismissSource();
+	const phases = [];
+	const sandbox = {
+		UPDATE_DONE_KEY: "dsh-mobile-maxxing:update-done",
+		sessionStorage: { removeItem: () => { throw new Error("private mode"); } },
+		setPhase: (phase) => phases.push(phase),
+	};
+	vm.runInNewContext(body + "\nthis.dismiss = dismiss;", sandbox);
+	assert.equal(typeof sandbox.dismiss, "function", "the sliced dismiss did not evaluate");
+	assert.doesNotThrow(() => sandbox.dismiss(), "a storage failure must not break dismiss");
+	assert.deepEqual(phases, [""], "the dialog closes even when the marker cannot be cleared");
 });
