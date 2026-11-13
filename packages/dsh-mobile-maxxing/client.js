@@ -7722,8 +7722,48 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /** A full-screen route closed the drawer marker; an explicit open ends it. */
     let drawerRouteClosed = false;
 
+    /**
+     * Re-publish the composer metrics the shell measured (#147).
+     *
+     * Upstream attaches one ResizeObserver to the composer seat and writes
+     * --dsh-composer-height / --dsh-conversation-viewport-height on the
+     * scroller. When the seat is replaced (an approval card takes it over) that
+     * observer is left on the old node, so the two variables keep the
+     * with-card geometry until a reload. Recompute them here; the values are
+     * the same ones upstream publishes, and a pass writes nothing when they
+     * already match.
+     */
+    function reconcileComposerMetrics() {
+      const scroller = document.querySelector('[class*="_scrollBody"]');
+      if (scroller === null || scroller === undefined || scroller.style === undefined) return;
+      const published = scroller.style.getPropertyValue("--dsh-composer-height");
+      if (published === "") return; // upstream has not measured yet
+      const seats = [...scroller.children].filter((child) => child.offsetHeight > 0);
+      const seat = seats.find((child) => child.querySelector("[data-rdsh-composer-root]") !== null) ?? seats.at(-1) ?? null;
+      if (seat === null) return;
+      const height = `${seat.offsetHeight}px`;
+      const viewport = `${scroller.clientHeight}px`;
+      const shown = scroller.style.getPropertyValue("--dsh-conversation-viewport-height");
+      if (published === height && shown === viewport) return;
+      if (published !== height) scroller.style.setProperty("--dsh-composer-height", height);
+      if (shown !== viewport) scroller.style.setProperty("--dsh-conversation-viewport-height", viewport);
+      // The abandoned observer reports a 0×0 size once its seat is replaced and
+      // overwrites what was just written. One follow-up settles the value after
+      // that callback; it is scheduled only on a mismatch, so two sources cannot
+      // ping-pong.
+      if (composerMetricFollowUp === 0) {
+        composerMetricFollowUp = setTimeout(() => {
+          composerMetricFollowUp = 0;
+          reconcileComposerMetrics();
+        }, 180);
+      }
+    }
+
+    let composerMetricFollowUp = 0;
+
     function decorateFast() {
       fitVisualViewport();
+      if (phone()) reconcileComposerMetrics();
       // One mode decision per pass. Every tag below belongs to the mobile
       // surface; on desktop the same pass only removes leftovers, so a
       // MutationObserver firing between frames cannot re-create a hook.
@@ -15889,6 +15929,10 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     --dsh-chat-user-width: 100% !important;
     --dsh-chat-content-width: 100% !important;
     --dsh-composer-card-max-width: 100% !important;
+    /* #147: an approval card pads itself with clearance + 16px, which made it
+       16px narrower on each side than the transcript it sits under. On a phone
+       both are edge-to-edge with the same 16px gutters. */
+    --dsh-composer-side-clearance: 0px !important;
   }
   [data-slot="conversation"] > *,
   [data-slot="main.conversation"] > *,

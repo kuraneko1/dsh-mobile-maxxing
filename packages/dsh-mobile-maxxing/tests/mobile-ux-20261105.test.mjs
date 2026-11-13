@@ -639,3 +639,24 @@ test("dismissing the update dialog still closes it when storage refuses", () => 
 	assert.doesNotThrow(() => sandbox.dismiss(), "a storage failure must not break dismiss");
 	assert.deepEqual(phases, [""], "the dialog closes even when the marker cannot be cleared");
 });
+
+test("the approval card keeps the transcript's gutters on a phone", () => {
+	// The approval panel pads itself with clearance + 16px, so on a phone it sat
+	// 16px narrower on each side than the text under it (#147).
+	const at = CLIENT.indexOf('--dsh-composer-card-max-width: 100% !important;');
+	assert.ok(at > 0, "the conversation sizing block is gone");
+	const block = CLIENT.slice(at, at + 400);
+	assert.match(block, /--dsh-composer-side-clearance: 0px !important;/, "the clearance keeps the shell's 16px");
+});
+
+test("the composer metrics are re-published after the seat is replaced", () => {
+	// Upstream's ResizeObserver stays on the old seat when an approval card
+	// takes it over, and the published height never updates until a reload.
+	const start = CLIENT.indexOf("function reconcileComposerMetrics()");
+	assert.ok(start > 0, "the reconcile pass is gone");
+	const body = CLIENT.slice(start, start + 1400);
+	assert.match(body, /--dsh-composer-height/, "the height variable is read");
+	assert.match(body, /--dsh-conversation-viewport-height/, "the viewport variable is read");
+	assert.match(body, /if \(published !== height\)/, "a matching value is not rewritten");
+	assert.match(CLIENT, /if \(phone\(\)\) reconcileComposerMetrics\(\);/, "the pass runs on every phone decorate");
+});
