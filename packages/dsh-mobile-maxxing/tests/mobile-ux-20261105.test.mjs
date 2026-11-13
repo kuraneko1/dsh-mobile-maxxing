@@ -645,8 +645,11 @@ test("the approval card keeps the transcript's gutters on a phone", () => {
 	// 16px narrower on each side than the text under it (#147).
 	const at = CLIENT.indexOf('--dsh-composer-card-max-width: 100% !important;');
 	assert.ok(at > 0, "the conversation sizing block is gone");
-	const block = CLIENT.slice(at, at + 400);
+	const block = CLIENT.slice(at, at + 900);
 	assert.match(block, /--dsh-composer-side-clearance: 0px !important;/, "the clearance keeps the shell's 16px");
+	// The shell redefines the variable on its own body element, so the composer
+	// subtree carries the override too; the slot alone was overridden.
+	assert.match(CLIENT, /\[data-slot="conversation\.composer"\] \* \{[\s\S]{0,80}--dsh-composer-side-clearance: 0px !important;/, "the composer subtree keeps it");
 });
 
 test("the composer metrics are re-published after the seat is replaced", () => {
