@@ -15931,7 +15931,14 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     --dsh-composer-card-max-width: 100% !important;
     /* #147: an approval card pads itself with clearance + 16px, which made it
        16px narrower on each side than the transcript it sits under. On a phone
-       both are edge-to-edge with the same 16px gutters. */
+       both are edge-to-edge with the same 16px gutters. The shell redefines the
+       variable on its own body element, so the composer seat carries the
+       override as well: defining it only on the slot was overridden one level
+       down and the card stayed narrow. */
+    --dsh-composer-side-clearance: 0px !important;
+  }
+  [data-slot="conversation.composer"],
+  [data-slot="conversation.composer"] * {
     --dsh-composer-side-clearance: 0px !important;
   }
   [data-slot="conversation"] > *,
