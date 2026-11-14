@@ -6978,6 +6978,21 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       else clearActivitySort();
     }
 
+    /**
+     * The direct child of the panel list that holds `node`, or null.
+     *
+     * rc.2 and older render each panel button as a child of the nav; rc.3
+     * wraps it in an entry element. Sibling placement and the landscape hide
+     * work on this child so both shapes behave the same.
+     */
+    function navChildOf(nav, node) {
+      let current = node ?? null;
+      while (current !== null && current !== undefined && current.parentElement !== nav) {
+        current = current.parentElement;
+      }
+      return current ?? null;
+    }
+
     /** Add a Settings row to the sidebar panel list, matching Plugins. */
     function openSettingsViaAccountMenu() {
       // The label is translated into every language the shell ships; when the
@@ -7059,7 +7074,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           openSettingsViaAccountMenu();
         });
       }
-      const anchor = auto ?? nav.querySelector(ariaLabelSelector("button", "navPlugins", ["Plugins"]));
+      // DSH 0.2.2-rc.3 wraps each stock panel button in an entry <div> (with
+      // its pin control), so the button is no longer a child of the nav.
+      // Placing the row after the button would put it inside that entry and
+      // squeeze both onto one line; place it after the entry instead.
+      const anchor = navChildOf(nav, auto ?? nav.querySelector(ariaLabelSelector("button", "navPlugins", ["Plugins"])));
       // Two exclusive branches. Written as one `if` with a trailing `else if`,
       // the second branch also ran when the row was already directly after the
       // anchor but not last, so `after()` and `append()` moved the row on every
@@ -7270,8 +7289,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (button.getAttribute("aria-label") !== label) button.setAttribute("aria-label", label);
       const title = button.querySelector(".hHd-Xa_panelTitle");
       if (title !== null && title.textContent !== label) title.textContent = label;
-      if (button.parentElement !== nav || button.nextElementSibling !== firstRow) {
-        if (firstRow.parentElement === nav) nav.insertBefore(button, firstRow);
+      const first = navChildOf(nav, firstRow);
+      if (button.parentElement !== nav || button.nextElementSibling !== first) {
+        if (first !== null) nav.insertBefore(button, first);
         else nav.append(button);
       }
       return button;
@@ -7401,10 +7421,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
       // A rerender can replace a stock row; drop a hide attribute from a node
       // that no longer belongs to the trio before marking the current three.
+      // rc.3 wraps a stock button in an entry with its pin control; hide the
+      // whole entry so no empty fill or stray pin stays behind.
+      const hidden = [rows.plugins, rows.automation, rows.settings].map((row) => navChildOf(nav, row) ?? row);
       for (const row of document.querySelectorAll(`[${NAV_MORE_HIDDEN}]`)) {
-        if (row !== rows.plugins && row !== rows.automation && row !== rows.settings) row.removeAttribute(NAV_MORE_HIDDEN);
+        if (!hidden.includes(row)) row.removeAttribute(NAV_MORE_HIDDEN);
       }
-      for (const row of [rows.plugins, rows.automation, rows.settings]) row.setAttribute(NAV_MORE_HIDDEN, "");
+      for (const row of hidden) {
+        if (!row.hasAttribute(NAV_MORE_HIDDEN)) row.setAttribute(NAV_MORE_HIDDEN, "");
+      }
       const launcher = sidebarShellMoreLauncher(nav);
       if (launcher !== null) {
         // rc.3+: one launcher. Retire the #59 row (and its menu) if an older
