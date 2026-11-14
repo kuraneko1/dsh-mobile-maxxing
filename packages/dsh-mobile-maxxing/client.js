@@ -16930,6 +16930,31 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
   background: var(--dsw-alias-border-l3, rgba(255,255,255,.16));
 }
 
+/* DSH 0.2.2-rc.3: plugin options (the forge branch chip and its "new
+   worktree" toggle) share the New Session row with the workspace chip and the
+   agent preset seat, and the row never wraps. A phone is narrower than all
+   three, so the preset label shrank to a single glyph while forge stacked its
+   two controls into a two-line column beside it. Give the options their own
+   line under the chips (still at the right edge, as the shell places them)
+   and lay the two controls side by side again. Matched by slot names, not by
+   the hashed classes; only rows that actually carry options are touched. */
+@media (max-width: 600px) {
+  div:has(> [data-slot="conversation.hero.agentPreset"]):has(> div > [data-slot="conversation.hero.options"]) {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  div:has(> [data-slot="conversation.hero.options"]):not(:has(> [data-slot="conversation.hero.agentPreset"])) {
+    flex: 1 0 100%;
+    justify-content: flex-end;
+    margin-left: 0;
+  }
+  [data-slot="conversation.hero.options"] > [data-forge-worktree] {
+    flex-direction: row;
+    align-items: center;
+    gap: 2px;
+  }
+}
+
 `;
 
     // The device half is always present. The mobile half is inserted as its
