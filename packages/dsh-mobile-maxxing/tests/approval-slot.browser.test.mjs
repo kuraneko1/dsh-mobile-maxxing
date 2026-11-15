@@ -54,6 +54,8 @@ function snapshot() {
 	const outer = input?.getBoundingClientRect(), inner = card?.getBoundingClientRect();
 	return {
 		inputGutters: outer && inner ? { left: inner.left - outer.left, right: outer.right - inner.right } : null,
+		sidebarClip: document.querySelector("[data-sidebar-scrollport] [data-sidebar-list-area]")
+			? getComputedStyle(document.querySelector("[data-sidebar-scrollport] [data-sidebar-list-area]")).overflowY : null,
 		x: rect.x, width: rect.width, sameSeat: seat === window.__compatSeat,
 		actualHeight: seat.offsetHeight,
 		publishedHeight: scroll.style.getPropertyValue("--dsh-composer-height"),
@@ -119,6 +121,7 @@ test("real approval slot keeps conversation width and returns composer height on
 			await browser.evaluate(() => { window.__compatSeat = document.querySelector("[data-composer-seat]"); });
 			const before = await browser.evaluate(snapshot);
 			assert.deepEqual(before.inputGutters, { left: 16, right: 16 });
+			if (before.sidebarClip !== null) assert.equal(before.sidebarClip, "visible");
 			await browser.evaluate(mountApproval);
 			await waitFor(browser, () => document.querySelector(".mna1RW_card") !== null);
 			await browser.evaluate(() => __RDSH_MOBILE_UX__.decorateNow());

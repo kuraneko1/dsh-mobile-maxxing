@@ -15754,6 +15754,12 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     transition: transform var(--rdsh-slide-ms) var(--rdsh-slide-ease), box-shadow var(--rdsh-slide-ms) var(--rdsh-slide-ease);
     will-change: transform; background: var(--dsw-alias-bg-base, #1b1b1d);
   }
+  /* rc.3 clips the inner list while its shared scrollport can scroll.
+     On touch devices one outer scrollport must reach the complete list. */
+  [data-rdsh-sidebar] [data-sidebar-scrollport] [data-sidebar-list-area] {
+    overflow: visible !important;
+  }
+
   /* The drop shadow lifts the drawer off the chat. It was removed once as the
      suspected "dark thing sliding in from the left"; the real cause was the
      chat column collapsing to 0px, which let an empty 390px column cover the

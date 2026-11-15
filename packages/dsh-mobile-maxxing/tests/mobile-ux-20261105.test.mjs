@@ -657,3 +657,8 @@ test("the normal input restores its own gutter without narrowing chat or takeove
 	assert.ok(at > CLIENT.indexOf("const CSS_PHONE"), "the inset belongs to the mobile-only sheet");
 	assert.doesNotMatch(CLIENT, /\[data-rdsh-conversation\] \{[^}]*padding-inline/, "do not pad the whole conversation");
 });
+
+test("rc.3 shared sidebar scrolling does not clip the older session rows", () => {
+	const css = CLIENT.slice(CLIENT.indexOf("const CSS_PHONE"));
+	assert.match(css, /\[data-rdsh-sidebar\] \[data-sidebar-scrollport\] \[data-sidebar-list-area\] \{\s*overflow: visible !important;/);
+});
