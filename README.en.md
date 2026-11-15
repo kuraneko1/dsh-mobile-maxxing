@@ -15,7 +15,7 @@ curl -fsSL https://raw.githubusercontent.com/kuraneko1/dsh-mobile-maxxing/main/s
 ```
 
 The installer targets the `web` profile by default. Restart DSH and reload the browser after installation.
-Set `DSH_PROFILE` to use another profile. `DSH_BUNDLE_TAG`, `DSH_LOCALE_REF`, and `DSH_MD_VERSION` pin the component versions independently.
+Set `DSH_PROFILE` to use another profile. `DSH_BUNDLE_TAG`, `DSH_LOCALE_VERSION`, and `DSH_MD_VERSION` pin the released component versions. `DSH_LOCALE_REF` explicitly switches the locale to a Git ref instead.
 
 To install only the mobile package:
 

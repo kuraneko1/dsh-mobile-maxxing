@@ -97,10 +97,15 @@ test('installer pins specified mobile and locale refs independently', (t) => {
   const overridden = spawnSync(process.execPath, [script], { env, encoding: 'utf8' });
   assert.equal(overridden.status, 0, overridden.stderr);
   assert.equal(JSON.parse(overridden.stdout)[5], 'https://example.test/v0.8.0/dsh-md-rendering-0.1.2.tgz');
-  delete env.DSH_BUNDLE_TAG; delete env.DSH_LOCALE_REF; delete env.DSH_BUNDLE_BASE_URL; delete env.DSH_MD_VERSION;
+  delete env.DSH_LOCALE_REF;
+  env.DSH_LOCALE_VERSION = '0.1.1';
+  const locale = spawnSync(process.execPath, [script], { env, encoding: 'utf8' });
+  assert.equal(locale.status, 0, locale.stderr);
+  assert.equal(JSON.parse(locale.stdout)[6], 'https://example.test/v0.8.0/dsh-locale-ja-0.1.1.tgz');
+  delete env.DSH_BUNDLE_TAG; delete env.DSH_LOCALE_REF; delete env.DSH_BUNDLE_BASE_URL; delete env.DSH_MD_VERSION; delete env.DSH_LOCALE_VERSION;
   const defaults = spawnSync(process.execPath, [script], { env, encoding: 'utf8' });
   assert.equal(defaults.status, 0, defaults.stderr);
-  assert.deepEqual(JSON.parse(defaults.stdout).slice(4), ['github:kuraneko1/dsh-mobile-maxxing#v1.0.6', 'https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v1.0.6/dsh-md-rendering-0.1.3.tgz', 'github:kuraneko1/dsh-locale-ja']);
+  assert.deepEqual(JSON.parse(defaults.stdout).slice(4), ['github:kuraneko1/dsh-mobile-maxxing#v1.0.6', 'https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v1.0.6/dsh-md-rendering-0.1.3.tgz', 'https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v1.0.6/dsh-locale-ja-0.1.2.tgz']);
 });
 
 test('bundle exports its client and distribution resources', () => {

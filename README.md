@@ -42,7 +42,7 @@ CJK の自動リンク修正は、PC の描画を変えない方針のため、�
 curl -fsSL https://raw.githubusercontent.com/kuraneko1/dsh-mobile-maxxing/main/scripts/install-mobile-bundle.mjs | node --input-type=module
 ```
 
-既定では `web` プロファイルへ、本体はリリース `v1.0.6` に固定、日本語化は `main`、表表示は `v1.0.6` の `0.1.3` 成果物を導入します。
+既定では `web` プロファイルへ、本体はリリース `v1.0.6` に固定、日本語化も同リリースの `0.1.2` 成果物、表表示は `v1.0.6` の `0.1.3` 成果物を導入します。
 導入後は DSH を再起動し、ブラウザを再読み込みしてください。
 
 別のプロファイルを使う場合:
@@ -163,7 +163,8 @@ v1.0.0 では、通知の信頼性と安全性も強化しています。
 | `DSH_PROFILE` | 導入先プロファイル | `web` |
 | `DSH_BUNDLE_TAG` | 本体を固定する Git ref と、表 tarball を含むリリースタグ | `v1.0.6`（本体もこのタグに固定） |
 | `DSH_BUNDLE_BASE_URL` | 表 tarball のダウンロード元 | 指定タグの GitHub Releases |
-| `DSH_LOCALE_REF` | 日本語化を固定する Git ref | `main` |
+| `DSH_LOCALE_VERSION` | 同じリリースから導入する日本語化の版 | `0.1.2` |
+| `DSH_LOCALE_REF` | 指定した場合だけ日本語化をGit refから導入 | 未指定（リリース成果物を使用） |
 | `DSH_MD_VERSION` | 表パッケージの版 | `0.1.3` |
 
 例:
