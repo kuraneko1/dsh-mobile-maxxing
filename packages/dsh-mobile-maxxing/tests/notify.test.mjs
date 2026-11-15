@@ -530,7 +530,7 @@ test("a broken push store does not stop the PWA routes", async () => {
  * endpoints subscribed to one origin, a fetch stub that records every send,
  * and the registered routes.
  */
-function acknowledgementHarness(endpoints) {
+function acknowledgementHarness(endpoints, { origin = "root", parentSession, failLookup = false } = {}) {
 	const home = mkdtempSync(join(tmpdir(), "rdsh-ack-"));
 	mkdirSync(join(home, "dsh-mobile-maxxing"), { recursive: true });
 	const store = new PushStore(join(home, "dsh-mobile-maxxing", "push.json"));
@@ -553,8 +553,11 @@ function acknowledgementHarness(endpoints) {
 	};
 	const listeners = new Map();
 	const routes = new Map();
-	const agent = { id: "s1" };
-	const agents = { get: (id) => (id === "s1" ? agent : undefined), roots: () => [agent] };
+	const agent = { id: "s1", session: { id: "s1", header: { origin, parentSession } } };
+	const agents = {
+		get(id) { if (failLookup) throw new Error("registry unavailable"); return id === "s1" ? agent : undefined; },
+		list: () => [agent],
+	};
 	const services = {
 		agents,
 		connection: { requestRejection: () => undefined },
@@ -615,6 +618,43 @@ function acknowledgementHarness(endpoints) {
 const ACK = "/api/dsh-mobile-maxxing/push/ack";
 const TEST_PUSH = "/api/dsh-mobile-maxxing/push/test";
 const TEST_ORIGIN = "https://app.example:8446";
+
+for (const [label, options, expected] of [
+	["ordinary session", {}, true],
+	["ordinary fork with a creator", { parentSession: "creator" }, true],
+	["subagent", { origin: "subagent", parentSession: "creator" }, false],
+]) {
+	test(`turn-end notifications use durable origin without roots(): ${label}`, async () => {
+		const endpoint = "https://web.push.apple.com/rc3";
+		const harness = acknowledgementHarness([endpoint], options);
+		try {
+			assert.doesNotThrow(() => harness.turnEnded());
+			const ack = await harness.post(ACK, { endpoint, sessionId: "s1", kind: "turn-end", origin: TEST_ORIGIN });
+			assert.equal(ack.body.acknowledged, expected);
+		} finally { harness.restore(); }
+	});
+}
+
+test("question setup errors cannot block or retry the real answerer", async () => {
+	const harness = acknowledgementHarness([], { failLookup: true });
+	const previousError = console.error;
+	const errors = [];
+	console.error = (...args) => errors.push(args);
+	try {
+		let nextCalls = 0;
+		const answer = Promise.resolve("real answer");
+		const result = harness.listeners.get("user-questions/request")({ agent: { id: "s1" } }, () => {
+			nextCalls += 1;
+			return answer;
+		});
+		assert.equal(result, answer);
+		assert.equal(nextCalls, 1);
+		await new Promise(setImmediate);
+		assert.equal(errors.length, 1);
+		assert.match(String(errors[0][1]), /registry unavailable/);
+		assert.equal(nextCalls, 1);
+	} finally { console.error = previousError; harness.restore(); }
+});
 
 test("a slow endpoint does not delay starting other push deliveries", async () => {
 	const slow = "https://web.push.apple.com/slow", fast = "https://web.push.apple.com/fast";
