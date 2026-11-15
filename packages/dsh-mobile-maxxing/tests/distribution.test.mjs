@@ -53,7 +53,9 @@ test("the inventory can read a title, a description and an icon", async () => {
 
 test("the root tarball stays free of the optional locale whole-pack", async () => {
 	const output = execFileSync("npm", ["pack", "--dry-run", "--json"], { cwd: repo, encoding: "utf8" });
-	const entries = JSON.parse(output)[0].files.map((entry) => entry.path);
+	const packed = JSON.parse(output);
+	const info = Array.isArray(packed) ? packed[0] : packed[manifest.name];
+	const entries = info.files.map((entry) => entry.path);
 	assert.equal(entries.some((entry) => entry.includes("dsh-locale-ja")), false,
 		"the mobile tarball contains the separate locale package");
 	assert.equal(entries.some((entry) => entry === "packages/dsh-locale-ja/client.js"), false);
@@ -94,7 +96,7 @@ test("the bundle installer defaults to the latest published release and pins the
 	// release assets, so a version that exists only as a version-bump
 	// commit on main has no download URL and the installer would 404.
 	// Bump this literal when a newer release is actually published.
-	assert.ok(script.includes('|| "v1.0.7"'),
+	assert.ok(script.includes('|| "v1.0.6"'),
 		"the installer's default tag has to be the latest published release, not a stale or unreleased one");
 	assert.ok(script.includes('"github:kuraneko1/dsh-mobile-maxxing#" + tag'),
 		"the main package is pinned to the tag even when DSH_BUNDLE_TAG is not set");
