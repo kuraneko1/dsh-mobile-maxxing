@@ -2,13 +2,16 @@
 import { spawnSync } from "node:child_process";
 
 const profile = process.env.DSH_PROFILE ?? process.argv[2] ?? "web";
-const tag = process.env.DSH_BUNDLE_TAG || "v1.0.7";
+const tag = process.env.DSH_BUNDLE_TAG || "v1.0.6";
 const base = process.env.DSH_BUNDLE_BASE_URL ?? "https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/" + tag;
 const markdownVersion = process.env.DSH_MD_VERSION ?? "0.1.3";
+const localeVersion = process.env.DSH_LOCALE_VERSION ?? "0.1.2";
 const packages = [
   "github:kuraneko1/dsh-mobile-maxxing#" + tag,
   base + `/dsh-md-rendering-${markdownVersion}.tgz`,
-  "github:kuraneko1/dsh-locale-ja" + (process.env.DSH_LOCALE_REF ? "#" + process.env.DSH_LOCALE_REF : ""),
+  process.env.DSH_LOCALE_REF
+    ? "github:kuraneko1/dsh-locale-ja#" + process.env.DSH_LOCALE_REF
+    : base + `/dsh-locale-ja-${localeVersion}.tgz`,
 ];
 
 const result = spawnSync("dsh", ["plugin", "--profile", profile, "add", ...packages], { stdio: "inherit" });

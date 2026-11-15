@@ -652,14 +652,13 @@ test("the approval card keeps the transcript's gutters on a phone", () => {
 	assert.match(CLIENT, /\[data-slot="conversation\.composer"\] \* \{[\s\S]{0,80}--dsh-composer-side-clearance: 0px !important;/, "the composer subtree keeps it");
 });
 
-test("the composer metrics are re-published after the seat is replaced", () => {
-	// Upstream's ResizeObserver stays on the old seat when an approval card
-	// takes it over, and the published height never updates until a reload.
-	const start = CLIENT.indexOf("function reconcileComposerMetrics()");
-	assert.ok(start > 0, "the reconcile pass is gone");
-	const body = CLIENT.slice(start, start + 1400);
-	assert.match(body, /--dsh-composer-height/, "the height variable is read");
-	assert.match(body, /--dsh-conversation-viewport-height/, "the viewport variable is read");
-	assert.match(body, /if \(published !== height\)/, "a matching value is not rewritten");
-	assert.match(CLIENT, /if \(phone\(\)\) reconcileComposerMetrics\(\);/, "the pass runs on every phone decorate");
+test("the normal input restores its own gutter without narrowing chat or takeover cards", () => {
+	const at = CLIENT.indexOf('  [data-rdsh-composer-root] { padding-inline: 16px !important; }');
+	assert.ok(at > CLIENT.indexOf("const CSS_PHONE"), "the inset belongs to the mobile-only sheet");
+	assert.doesNotMatch(CLIENT, /\[data-rdsh-conversation\] \{[^}]*padding-inline/, "do not pad the whole conversation");
+});
+
+test("rc.3 shared sidebar scrolling does not clip the older session rows", () => {
+	const css = CLIENT.slice(CLIENT.indexOf("const CSS_PHONE"));
+	assert.match(css, /\[data-rdsh-sidebar\] \[data-sidebar-scrollport\] \[data-sidebar-list-area\] \{\s*overflow: visible !important;/);
 });

@@ -3,12 +3,14 @@
 DeepSeek Harness（DSH）の Web UI を、スマートフォンとタブレットで快適に使うためのプラグイン群です。
 PWA、モバイルレイアウト、通知、Markdown 表、日本語 UI を、必要なものだけ導入できます。
 
-**[最新リリース v1.0.7](https://github.com/kuraneko1/dsh-mobile-maxxing/releases/tag/v1.0.7)** · **[リリースノート](RELEASE-NOTES-v1.0.7.md)** · **[English](README.en.md)** · **[简体中文](README.zh-CN.md)**
+**[最新リリース v1.0.6](https://github.com/kuraneko1/dsh-mobile-maxxing/releases/tag/v1.0.6)** · **[リリースノート](RELEASE-NOTES-v1.0.6.md)** · **[English](README.en.md)** · **[简体中文](README.zh-CN.md)**
 
 - モバイル本体は素の DSH にそのまま導入でき、通知用の外部ライブラリも不要です。
 - 画面幅ではなく端末を判定するため、狭い PC ウィンドウやタッチ対応 Windows PC をモバイル扱いしません。
 - PC ではモバイル用の UI・表スタイルを構築せず、標準の DSH を保ちます。
 - 端末側の見た目や入力設定はブラウザごとに保存し、ホストの共有設定を書き換えません。
+
+> 次版は未公開です。撤回済み v1.0.7 の版表記は開発用に残っており、公開版は v1.0.6 です。[次版の変更と公開前チェック](packages/dsh-mobile-maxxing/docs/release-next-draft.ja.md)を参照してください。
 
 ## コンポーネント
 
@@ -40,7 +42,7 @@ CJK の自動リンク修正は、PC の描画を変えない方針のため、�
 curl -fsSL https://raw.githubusercontent.com/kuraneko1/dsh-mobile-maxxing/main/scripts/install-mobile-bundle.mjs | node --input-type=module
 ```
 
-既定では `web` プロファイルへ、本体はリリース `v1.0.7` に固定、日本語化は `main`、表表示は `v1.0.7` の `0.1.3` 成果物を導入します。
+既定では `web` プロファイルへ、本体はリリース `v1.0.6` に固定、日本語化も同リリースの `0.1.2` 成果物、表表示は `v1.0.6` の `0.1.3` 成果物を導入します。
 導入後は DSH を再起動し、ブラウザを再読み込みしてください。
 
 別のプロファイルを使う場合:
@@ -64,7 +66,7 @@ dsh plugin --profile web add github:kuraneko1/dsh-locale-ja
 ### Markdown 表だけを追加
 
 ```sh
-dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v1.0.7/dsh-md-rendering-0.1.3.tgz
+dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v1.0.6/dsh-md-rendering-0.1.3.tgz
 ```
 
 `dsh plugin --profile web add` は依存と bundle の両方を更新します。`cd ~/.dsh/profiles/web` は不要です。
@@ -159,22 +161,23 @@ v1.0.0 では、通知の信頼性と安全性も強化しています。
 | 環境変数 | 用途 | 既定 |
 | --- | --- | --- |
 | `DSH_PROFILE` | 導入先プロファイル | `web` |
-| `DSH_BUNDLE_TAG` | 本体を固定する Git ref と、表 tarball を含むリリースタグ | `v1.0.7`（本体もこのタグに固定） |
+| `DSH_BUNDLE_TAG` | 本体を固定する Git ref と、表 tarball を含むリリースタグ | `v1.0.6`（本体もこのタグに固定） |
 | `DSH_BUNDLE_BASE_URL` | 表 tarball のダウンロード元 | 指定タグの GitHub Releases |
-| `DSH_LOCALE_REF` | 日本語化を固定する Git ref | `main` |
+| `DSH_LOCALE_VERSION` | 同じリリースから導入する日本語化の版 | `0.1.2` |
+| `DSH_LOCALE_REF` | 指定した場合だけ日本語化をGit refから導入 | 未指定（リリース成果物を使用） |
 | `DSH_MD_VERSION` | 表パッケージの版 | `0.1.3` |
 
 例:
 
 ```sh
 DSH_PROFILE=web-mobile \
-DSH_BUNDLE_TAG=v1.0.7 \
+DSH_BUNDLE_TAG=v1.0.6 \
 DSH_LOCALE_REF=main \
 DSH_MD_VERSION=0.1.3 \
   node scripts/install-mobile-bundle.mjs
 ```
 
-本体は既定で `DSH_BUNDLE_TAG` のタグ（`v1.0.7`）に固定されます。`DSH_BUNDLE_TAG` を指定すると、本体と表 tarball の両方がその ref に切り替わります。指定したリリースに、対応する表 tarball が必要です。
+本体は既定で `DSH_BUNDLE_TAG` のタグ（`v1.0.6`）に固定されます。`DSH_BUNDLE_TAG` を指定すると、本体と表 tarball の両方がその ref に切り替わります。指定したリリースに、対応する表 tarball が必要です。
 
 ## トラブルシューティング
 
@@ -258,6 +261,7 @@ README の版付きURLは `pack-all` が更新します。版なしURLを再利�
 ## 貢献者
 
 - [@kuraneko1](https://github.com/kuraneko1)（`_ryu15_` 名義のコミットを含む）— 実装、レビュー対応、日本語化、検証、配布整備
+- [@FlowingSPDG](https://github.com/FlowingSPDG)
 - [@AliceSaikawa](https://github.com/AliceSaikawa) — iOS の PWA、キーボード表示、モバイル UI の改善
 - コードレビューと検証に協力いただいた皆さん
 

@@ -5267,8 +5267,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function clampModelMenu(menu) {
       const style = menu.style;
       if (style === null || style === undefined) return;
+      const anchored = (style.getPropertyValue("--dsh-model-anchor") || "").trim() !== "";
       const current = parseFloat(style.left);
-      if (!Number.isFinite(current)) return;
+      if (!anchored && !Number.isFinite(current)) return;
       const viewport = window.visualViewport;
       const viewportWidth = viewport !== null && viewport !== undefined
         && Number.isFinite(viewport.width) && viewport.width > 0
@@ -5282,6 +5283,17 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const minLeft = Math.ceil(viewportLeft + safeInset("left") + 8);
       const maxRight = viewportLeft + viewportWidth - safeInset("right") - 8;
       if (!(maxRight > minLeft)) return;
+      if (anchored) {
+        // Keep rc.3's vertical anchor and live horizontal alignment, not pixels.
+        for (const [name, value] of [
+          ["--rdsh-model-menu-safe-left", `${minLeft}px`],
+          ["--rdsh-model-menu-safe-right", `${Math.max(0, Math.ceil(window.innerWidth - maxRight))}px`],
+          ["--rdsh-model-menu-safe-width", `${Math.max(1, Math.floor(maxRight - minLeft))}px`],
+        ]) {
+          if (style.getPropertyValue(name) !== value) style.setProperty(name, value);
+        }
+        return;
+      }
       const rect = typeof menu.getBoundingClientRect === "function" ? menu.getBoundingClientRect() : null;
       let width = menu.offsetWidth || (rect === null ? 0 : rect.width)
         || menu.clientWidth || parseFloat(style.width) || 0;
@@ -5355,10 +5367,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           target?.removeEventListener?.("scroll", band);
         }
       }
-      if (modelMenuWatched !== null && modelMenuMaxWidth !== null
-        && modelMenuWatched.style !== null && modelMenuWatched.style !== undefined
-        && modelMenuWatched.style.maxWidth === modelMenuMaxWidth) {
-        modelMenuWatched.style.removeProperty("max-width");
+      const style = modelMenuWatched?.style;
+      if (style !== null && style !== undefined) {
+        if (modelMenuMaxWidth !== null && style.maxWidth === modelMenuMaxWidth) style.removeProperty("max-width");
+        for (const name of ["--rdsh-model-menu-safe-left", "--rdsh-model-menu-safe-right", "--rdsh-model-menu-safe-width"]) {
+          style.removeProperty(name);
+        }
       }
       modelMenuWatched = null;
       modelMenuMaxWidth = null;
@@ -6265,11 +6279,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         return;
       }
       const live = new Set();
+      const frames = new Set();
       for (const card of document.querySelectorAll('[class*="_card"]')) {
+        // Approval uses _root, not _frame: never climb into the app shell.
+        const frame = card.parentElement;
+        if (!classToken(card, /_card$/) || !classToken(frame, /_frame$/)) continue;
         if (card.querySelector('[class*="_options"], [class*="_strip"]') === null) continue;
         card.setAttribute("data-rdsh-question-card", "");
-        const frame = card.closest('[class*="_frame"]');
-        if (frame !== null) frame.setAttribute("data-rdsh-question-frame", "");
+        frame.setAttribute("data-rdsh-question-frame", "");
+        frames.add(frame);
         for (const tile of card.querySelectorAll('[class*="_options"] > [class*="_option"], [class*="_options"] > [class*="_customRow"]')) {
           tile.setAttribute("data-rdsh-question-tile", "");
         }
@@ -6277,6 +6295,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         installQuestionCardBehavior(card);
         if (card.hasAttribute("data-rdsh-question-typing")) revealQuestionField(card);
         live.add(card);
+      }
+      for (const frame of document.querySelectorAll("[data-rdsh-question-frame]")) {
+        if (!frames.has(frame)) frame.removeAttribute("data-rdsh-question-frame");
+      }
+      for (const card of document.querySelectorAll("[data-rdsh-question-card]")) {
+        if (!live.has(card)) {
+          card.removeAttribute("data-rdsh-question-card");
+          card.removeAttribute("data-rdsh-question-typing");
+        }
       }
       for (const card of questionBehaviorCards.keys()) {
         if (!live.has(card)) clearQuestionBehavior(card);
@@ -6561,6 +6588,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /** The header's count chips, by structure first and label second. */
     function headerActivityChips() {
       const found = new Set();
+      // rc.3 uses dialog rather than tree; its data hooks are locale-independent.
+      for (const marker of document.querySelectorAll("[data-subagent-count], [data-job-count]")) {
+        const button = marker.closest("button");
+        if (button !== null) found.add(button);
+      }
       // 0.2.2 translates the chips itself, and its wording changed twice in one
       // release ("3 件のサブエージェントが実行中" -> "実行中のサブエージェント3件").
       // The two chips are the only controls in the header's actions slot that
@@ -6670,7 +6702,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       for (const button of buttons) {
         const label = button.getAttribute("aria-label") || "";
         // The structure says which chip it is even when the wording does not.
-        const kind = button.getAttribute("aria-haspopup") === "tree"
+        const kind = button.querySelector("[data-subagent-count]") !== null
+          || button.getAttribute("aria-haspopup") === "tree"
           || (ACTIVITY_SUBAGENT_PROBE !== null && ACTIVITY_SUBAGENT_PROBE.test(label))
           ? "subagent" : "shell";
         // Writes are compared first: this pass also runs straight from the
@@ -6773,7 +6806,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (child.querySelector("[data-rdsh-activity-chip]") !== null) continue;
         if (kind === "subagent") {
           const tree = subagentListOf(child);
-          if (tree !== null) return { box: tree.parentElement, list: tree };
+          if (tree !== null) return {
+            box: tree.parentElement, list: tree,
+            heading: child.querySelector("[data-subagent-section-header]"),
+          };
           continue;
         }
         const list = shellListOf(child);
@@ -6786,7 +6822,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function removeActivityHeading() {
       activityHeadingNode?.remove();
       activityHeadingNode = null;
-      for (const stale of document.querySelectorAll("[data-rdsh-activity-heading]")) stale.remove();
+      for (const stale of document.querySelectorAll("[data-rdsh-activity-heading], [data-rdsh-activity-sort]")) stale.remove();
     }
 
     /** Whether a row of the open list is still running, from its glyph. */
@@ -6926,8 +6962,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * the next pass, so the heading cannot be duplicated by a remount either.
      */
     function ensureActivityHeading(popover, label, sortable) {
-      let heading = activityHeadingNode;
-      if (heading === null || heading.parentElement !== popover.box) {
+      if (popover.heading && activityHeadingNode !== null) removeActivityHeading();
+      let heading = popover.heading ?? activityHeadingNode;
+      if (heading === null || (!popover.heading && heading.parentElement !== popover.box)) {
         removeActivityHeading();
         heading = document.createElement("div");
         heading.className = "rdsh-activity-heading";
@@ -7747,48 +7784,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /** A full-screen route closed the drawer marker; an explicit open ends it. */
     let drawerRouteClosed = false;
 
-    /**
-     * Re-publish the composer metrics the shell measured (#147).
-     *
-     * Upstream attaches one ResizeObserver to the composer seat and writes
-     * --dsh-composer-height / --dsh-conversation-viewport-height on the
-     * scroller. When the seat is replaced (an approval card takes it over) that
-     * observer is left on the old node, so the two variables keep the
-     * with-card geometry until a reload. Recompute them here; the values are
-     * the same ones upstream publishes, and a pass writes nothing when they
-     * already match.
-     */
-    function reconcileComposerMetrics() {
-      const scroller = document.querySelector('[class*="_scrollBody"]');
-      if (scroller === null || scroller === undefined || scroller.style === undefined) return;
-      const published = scroller.style.getPropertyValue("--dsh-composer-height");
-      if (published === "") return; // upstream has not measured yet
-      const seats = [...scroller.children].filter((child) => child.offsetHeight > 0);
-      const seat = seats.find((child) => child.querySelector("[data-rdsh-composer-root]") !== null) ?? seats.at(-1) ?? null;
-      if (seat === null) return;
-      const height = `${seat.offsetHeight}px`;
-      const viewport = `${scroller.clientHeight}px`;
-      const shown = scroller.style.getPropertyValue("--dsh-conversation-viewport-height");
-      if (published === height && shown === viewport) return;
-      if (published !== height) scroller.style.setProperty("--dsh-composer-height", height);
-      if (shown !== viewport) scroller.style.setProperty("--dsh-conversation-viewport-height", viewport);
-      // The abandoned observer reports a 0×0 size once its seat is replaced and
-      // overwrites what was just written. One follow-up settles the value after
-      // that callback; it is scheduled only on a mismatch, so two sources cannot
-      // ping-pong.
-      if (composerMetricFollowUp === 0) {
-        composerMetricFollowUp = setTimeout(() => {
-          composerMetricFollowUp = 0;
-          reconcileComposerMetrics();
-        }, 180);
-      }
-    }
-
-    let composerMetricFollowUp = 0;
-
     function decorateFast() {
       fitVisualViewport();
-      if (phone()) reconcileComposerMetrics();
       // One mode decision per pass. Every tag below belongs to the mobile
       // surface; on desktop the same pass only removes leftovers, so a
       // MutationObserver firing between frames cannot re-create a hook.
@@ -15757,6 +15754,12 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     transition: transform var(--rdsh-slide-ms) var(--rdsh-slide-ease), box-shadow var(--rdsh-slide-ms) var(--rdsh-slide-ease);
     will-change: transform; background: var(--dsw-alias-bg-base, #1b1b1d);
   }
+  /* rc.3 clips the inner list while its shared scrollport can scroll.
+     On touch devices one outer scrollport must reach the complete list. */
+  [data-rdsh-sidebar] [data-sidebar-scrollport] [data-sidebar-list-area] {
+    overflow: visible !important;
+  }
+
   /* The drop shadow lifts the drawer off the chat. It was removed once as the
      suspected "dark thing sliding in from the left"; the real cause was the
      chat column collapsing to 0px, which let an empty 390px column cover the
@@ -15848,6 +15851,9 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   [data-rdsh-settings-nav-arrow]:hover { background: var(--dsw-alias-button-floating-hover, #f1f3f5); }
   [data-rdsh-settings-nav-arrow]:active { transform: scale(.94); }
   [data-rdsh-settings-nav-arrow] svg { width: 16px; height: 16px; }
+  /* Shared clearance stays zero for chat/overlays; inset only the input card. */
+  [data-rdsh-composer-root] { padding-inline: 16px !important; }
+
   /* The stats dock (turns / tok/s / cache hit / context %) stays visible, but
      moves out of the composer's layout. The card can then sit in the safe-area
      strip instead of leaving a blank band below it, and the stats fill that
@@ -16278,6 +16284,13 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
      safe band is smaller than the menu, and !important made that write lose, so
      a wide menu crossed the right edge (#84). */
   [data-rdsh-model-menu] { max-width: calc(100vw - 24px); box-sizing: border-box !important; }
+  /* rc.3: constrain its anchor box without replacing the vertical anchor. */
+  [data-rdsh-model-menu][style*="--dsh-model-anchor"] {
+    left: var(--rdsh-model-menu-safe-left, 12px) !important;
+    right: max(anchor(right), var(--rdsh-model-menu-safe-right, 12px)) !important;
+    min-width: min(240px, var(--rdsh-model-menu-safe-width, calc(100vw - 24px))) !important;
+    max-width: min(420px, var(--rdsh-model-menu-safe-width, calc(100vw - 24px))) !important;
+  }
   [data-rdsh-model-menu] [class*="_cell"] { min-width: 0 !important; gap: 8px !important; }
   [data-rdsh-model-menu] [class*="_cell"] > span:last-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* #84: a local model's absolute path gives its row a 422px min-content width

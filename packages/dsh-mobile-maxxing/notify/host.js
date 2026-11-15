@@ -1027,7 +1027,7 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 			if (copy.onlyMobileTurns && !fromPhone) return;
 			// Root sessions only: a subagent finishing is not news.
 			const agent = agents?.get(session.id);
-			if (agent === undefined || !isRootSession(session)) return;
+			if (agent === undefined || !isRootSession(agent.session) || !isRootSession(session)) return;
 			const payload = buildTurnEndPayload(session.id, event.data?.reason, {
 				copy, lang: copy.lang, session: sessionNameOf(ctx, session),
 			});
@@ -1036,23 +1036,24 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 			});
 		});
 		agentCtx.effect(() => agentCtx.on("user-questions/request", function (request, next) {
-			// Outermost listener: fire and forget, then let the real answerer run.
-			const id = request?.agent?.id;
-			const asking = request?.agent?.session;
-			const agent = typeof id === "string" ? agents?.get(id) : undefined;
-			if (agent !== undefined && isRootSession(asking)) {
+			// Even notification setup failures must not block the real answerer.
+			void Promise.resolve().then(() => {
+				const id = request?.agent?.id;
+				const agent = typeof id === "string" ? agents?.get(id) : undefined;
+				const asking = request?.agent?.session;
+				if (agent === undefined || !isRootSession(agent.session) || !isRootSession(asking)) return;
 				// Prefer the origin that most recently started a turn in this
 				// session; otherwise fanOut uses the newest origin this host
 				// learned, and sends nothing when it has learned none (#27).
 				const origin = typeof id === "string" ? (lastTurnOrigin.get(id) || "") : "";
-				void fanOut(buildQuestionPayload(request, {
+				return fanOut(buildQuestionPayload(request, {
 					copy,
 					lang: copy.lang,
 					session: asking === undefined ? "" : sessionNameOf(ctx, asking),
-				}), { origin, awaitAck: true }).catch((error) => {
-					console.error("[dsh-mobile-maxxing] question push failed", error);
-				});
-			}
+				}), { origin, awaitAck: true });
+			}).catch((error) => {
+				console.error("[dsh-mobile-maxxing] question push failed", error);
+			});
 			return next();
 		}, { prepend: true }), "dsh-mobile-maxxing: question push fan-out");
 	});
