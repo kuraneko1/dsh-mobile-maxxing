@@ -226,7 +226,7 @@ function makeInstance() {
 	const listeners = new Map();
 	const routes = new Map();
 	const agent = { id: "s1", header: { cwd: "/tmp/qa" }, session: { id: "s1", header: { cwd: "/tmp/qa" } } };
-	const agents = { get: (id) => (id === "s1" ? agent : undefined), roots: () => [agent] };
+	const agents = { get: (id) => (id === "s1" ? agent : undefined) };
 	const services = {
 		agents,
 		connection: { requestRejection: () => undefined },

@@ -694,6 +694,22 @@ export function sessionNameOf(ctx, session) {
 	return typeof base === "string" ? base : "";
 }
 
+/**
+ * Whether a session is top-level rather than a delegated subagent child.
+ *
+ * DSH removed the runtime `ctx.agents.roots()` query in 0.2.2-rc.2 (0.2.2-rc.1
+ * still has it; the subagent-runtime-ownership upgrade guide documents the
+ * removal), so the durable `header.origin` classification is the supported
+ * signal. A missing header — an older recorded session or a test double — is
+ * treated as top-level.
+ *
+ * @param {object} session - live or recorded session.
+ * @returns {boolean} true when the session is not a subagent child.
+ */
+export function isRootSession(session) {
+	return session?.header?.origin !== "subagent";
+}
+
 // ---------------------------------------------------------------------------
 // Plugin half
 // ---------------------------------------------------------------------------
@@ -1011,7 +1027,7 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 			if (copy.onlyMobileTurns && !fromPhone) return;
 			// Root sessions only: a subagent finishing is not news.
 			const agent = agents?.get(session.id);
-			if (agent === undefined || !agents.roots().includes(agent)) return;
+			if (agent === undefined || !isRootSession(session)) return;
 			const payload = buildTurnEndPayload(session.id, event.data?.reason, {
 				copy, lang: copy.lang, session: sessionNameOf(ctx, session),
 			});
@@ -1022,9 +1038,9 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 		agentCtx.effect(() => agentCtx.on("user-questions/request", function (request, next) {
 			// Outermost listener: fire and forget, then let the real answerer run.
 			const id = request?.agent?.id;
+			const asking = request?.agent?.session;
 			const agent = typeof id === "string" ? agents?.get(id) : undefined;
-			if (agent !== undefined && agents.roots().includes(agent)) {
-				const asking = request?.agent?.session;
+			if (agent !== undefined && isRootSession(asking)) {
 				// Prefer the origin that most recently started a turn in this
 				// session; otherwise fanOut uses the newest origin this host
 				// learned, and sends nothing when it has learned none (#27).
