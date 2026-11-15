@@ -102,10 +102,8 @@ function makeInstance({ getOrigin = INTERNAL_ORIGIN, config = {}, rejection = un
 	const listeners = new Map();
 	const routes = new Map();
 	const agentsById = new Map();
-	const roots = [];
 	const agents = {
 		get: (id) => agentsById.get(id),
-		roots: () => roots,
 	};
 	const services = {
 		agents,
@@ -153,7 +151,6 @@ function makeInstance({ getOrigin = INTERNAL_ORIGIN, config = {}, rejection = un
 		addRoot(id) {
 			const agent = { id, header: { cwd: "/tmp/qa" }, session: { id, header: { cwd: "/tmp/qa" } } };
 			agentsById.set(id, agent);
-			roots.push(agent);
 			return agent;
 		},
 	};
@@ -203,11 +200,11 @@ function turn(instance, id, type) {
 }
 
 /** Fire the plugin's question listener. */
-function question(instance, id) {
+function question(instance, id, header = { cwd: "/tmp/qa" }) {
 	const listener = instance.listeners.get("user-questions/request");
 	assert.ok(listener !== undefined, "the question listener is mounted");
 	listener({
-		agent: { id, session: { id, header: { cwd: "/tmp/qa" } } },
+		agent: { id, session: { id, header } },
 		questions: [{ header: "Confirm", question: "Continue?" }],
 	}, () => {});
 }
@@ -486,6 +483,36 @@ test("an event with no origin of its own reaches only the newest app, never all 
 		fetchRecorder.restore();
 	}
 	assert.equal(home, process.env.DSH_HOME);
+}));
+
+test("a subagent session never pushes, even for a plan-review question", withHome(async (_home, file) => {
+	mkdirSync(dirname(file), { recursive: true });
+	const phone = subscription("https://web.push.apple.com/phone");
+	seed(file, phone.endpoint, NEW_ORIGIN);
+	const app = makeInstance();
+	app.addRoot("session-1");
+	assert.equal((await request(app, "/api/dsh-mobile-maxxing/push/config", { method: "GET", origin: NEW_ORIGIN })).status, 200);
+	const fetchRecorder = withFetch(() => ({ status: 201, ok: true }));
+	const warnings = [];
+	const previousWarn = console.warn;
+	console.warn = (...args) => warnings.push(args.map(String).join(" "));
+	try {
+		// Plan mode's exit asks the review question through this listener. A
+		// subagent header must skip the push without throwing: the listener is
+		// the outermost one, so an exception would fail the question itself.
+		question(app, "session-1", { origin: "subagent" });
+		await settle();
+		assert.deepEqual(fetchRecorder.calls, [], "a subagent question reached the phone");
+		assert.deepEqual(warnings, [], "a subagent question was not even attempted");
+
+		// The same id as a top-level session still pushes: the header decides.
+		question(app, "session-1");
+		await settle();
+		assert.deepEqual(fetchRecorder.calls, [phone.endpoint], "a top-level question stopped pushing");
+	} finally {
+		console.warn = previousWarn;
+		fetchRecorder.restore();
+	}
 }));
 
 test("restart restores only each profile's learned subscribed origin", withHome(async (_home, file) => {
