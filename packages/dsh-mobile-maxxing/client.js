@@ -11240,7 +11240,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // used to hand that swipe to the drawer.
         const dockRect = rightPanelNode === null || rightPanelNode === undefined ? null : rightPanelNode.getBoundingClientRect();
         const docked = dockRect !== null && dockRect.width > 0 && dockRect.left >= EDGE_SUPPRESS_PX;
-        const inLeftEdge = !fromRight && touch.clientX <= openingWidth && docked;
+        const inLeftEdge = !fromRight && touch.clientX <= openingWidth && docked && touch.clientX < dockRect.left;
         if (!inLeftEdge) {
           // #59: a docked panel (landscape) shares the screen with the
           // conversation. Only a swipe that starts on the panel closes it; a

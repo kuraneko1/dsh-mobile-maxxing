@@ -948,6 +948,16 @@ test("#59 a panel closed during a swipe cannot be reopened by the stale toggle",
 	booted.disposeAll();
 });
 
+test("#74 Android's wider opener never takes a docked panel's own swipe", () => {
+ const booted=bootGestures({narrow:false,mode:"mobile",width:844});
+ booted.sandbox.navigator=new Proxy(booted.sandbox.navigator,{get:(target,key)=>key==="userAgent"?"Android 16":Reflect.get(target,key)});
+ const {collapse}=dockFixture(booted.doc,{viewport:844,dock:450});booted.drainFrames();
+ const {start,move}=edgeSwipeHandlers(booted),body=new FakeElement("div");body._closest=()=>null;
+ swipeStart(start,400,body);move(swipeTouch(520));
+ assert.equal(collapse.clicks,1,"the dock starts at394px, inside Android's422px opening half: it must close, not open the drawer");
+ assert.notEqual(booted.doc.documentElement.getAttribute("data-rdsh-drawer"),"open");booted.disposeAll();
+});
+
 test("#59 a docked panel closes only under a swipe that starts on it", () => {
 	const booted = bootGestures({ narrow: false, mode: "mobile", width: 844 });
 	const { collapse } = dockFixture(booted.doc);
