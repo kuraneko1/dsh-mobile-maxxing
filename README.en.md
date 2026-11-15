@@ -6,7 +6,7 @@
 Make the DeepSeek Harness Web UI useful on phones and tablets without changing the stock desktop experience.
 The release contains three independent components: mobile UX and notifications, mobile Markdown tables, and an optional Japanese locale.
 
-**[v1.0.7 release](https://github.com/kuraneko1/dsh-mobile-maxxing/releases/tag/v1.0.7)** · **[Japanese release notes](RELEASE-NOTES-v1.0.7.md)**
+**[v1.0.6 release](https://github.com/kuraneko1/dsh-mobile-maxxing/releases/tag/v1.0.6)** · **[Japanese release notes](RELEASE-NOTES-v1.0.6.md)**
 
 ## Install all three components
 
@@ -54,6 +54,7 @@ Use the [release command](README.md#リリース). It requires a complete locale
 ## Contributors
 
 - [@kuraneko1](https://github.com/kuraneko1), including commits under `_ryu15_`
+- [@FlowingSPDG](https://github.com/FlowingSPDG)
 - [@AliceSaikawa](https://github.com/AliceSaikawa)
 - Everyone who contributed code review and verification
 
