@@ -49,7 +49,11 @@ function snapshot() {
 	const seat = document.querySelector("[data-composer-seat]");
 	const scroll = document.querySelector("[data-conversation-scroll]");
 	const rect = body.getBoundingClientRect();
+	const input = document.querySelector("[data-rdsh-composer-root]");
+	const card = document.querySelector("[data-rdsh-add]")?.closest('[class*="_card"]');
+	const outer = input?.getBoundingClientRect(), inner = card?.getBoundingClientRect();
 	return {
+		inputGutters: outer && inner ? { left: inner.left - outer.left, right: outer.right - inner.right } : null,
 		x: rect.x, width: rect.width, sameSeat: seat === window.__compatSeat,
 		actualHeight: seat.offsetHeight,
 		publishedHeight: scroll.style.getPropertyValue("--dsh-composer-height"),
@@ -111,9 +115,10 @@ test("real approval slot keeps conversation width and returns composer height on
 				for (; f; f = f.return) if (f.type?.name === "FactoryOccurrenceBody" && f.memoizedProps.scopeBinding?.ctx) return true;
 				return false;
 			});
-			await browser.evaluate(async () => { await document.fonts.ready; await new Promise(requestAnimationFrame); });
+			await browser.evaluate(async () => { __RDSH_MOBILE_UX__.decorateNow(); await document.fonts.ready; await new Promise(requestAnimationFrame); });
 			await browser.evaluate(() => { window.__compatSeat = document.querySelector("[data-composer-seat]"); });
 			const before = await browser.evaluate(snapshot);
+			assert.deepEqual(before.inputGutters, { left: 16, right: 16 });
 			await browser.evaluate(mountApproval);
 			await waitFor(browser, () => document.querySelector(".mna1RW_card") !== null);
 			await browser.evaluate(() => __RDSH_MOBILE_UX__.decorateNow());
@@ -130,6 +135,7 @@ test("real approval slot keeps conversation width and returns composer height on
 				return scroll.style.getPropertyValue("--dsh-composer-height") === seat.offsetHeight + "px";
 			});
 			const after = await browser.evaluate(snapshot);
+			assert.deepEqual(after.inputGutters, before.inputGutters);
 			for (const state of [during, after]) {
 				assert.equal(state.width, before.width); assert.equal(state.x, before.x);
 				assert.equal(state.questionFrames, 0); assert.equal(state.sameSeat, true);

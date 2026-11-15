@@ -15820,6 +15820,9 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   [data-rdsh-settings-nav-arrow]:hover { background: var(--dsw-alias-button-floating-hover, #f1f3f5); }
   [data-rdsh-settings-nav-arrow]:active { transform: scale(.94); }
   [data-rdsh-settings-nav-arrow] svg { width: 16px; height: 16px; }
+  /* Shared clearance stays zero for chat/overlays; inset only the input card. */
+  [data-rdsh-composer-root] { padding-inline: 16px !important; }
+
   /* The stats dock (turns / tok/s / cache hit / context %) stays visible, but
      moves out of the composer's layout. The card can then sit in the safe-area
      strip instead of leaving a blank band below it, and the stats fill that

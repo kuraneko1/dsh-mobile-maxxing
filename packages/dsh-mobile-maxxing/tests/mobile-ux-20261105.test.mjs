@@ -651,3 +651,9 @@ test("the approval card keeps the transcript's gutters on a phone", () => {
 	// subtree carries the override too; the slot alone was overridden.
 	assert.match(CLIENT, /\[data-slot="conversation\.composer"\] \* \{[\s\S]{0,80}--dsh-composer-side-clearance: 0px !important;/, "the composer subtree keeps it");
 });
+
+test("the normal input restores its own gutter without narrowing chat or takeover cards", () => {
+	const at = CLIENT.indexOf('  [data-rdsh-composer-root] { padding-inline: 16px !important; }');
+	assert.ok(at > CLIENT.indexOf("const CSS_PHONE"), "the inset belongs to the mobile-only sheet");
+	assert.doesNotMatch(CLIENT, /\[data-rdsh-conversation\] \{[^}]*padding-inline/, "do not pad the whole conversation");
+});
