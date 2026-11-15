@@ -1569,6 +1569,52 @@ function rowLabels(tree) {
 	return [...tree.children].map((wrapper) => wrapper.querySelector('[role="treeitem"]').children[1].textContent);
 }
 
+test("rc.3 count hooks work without translated labels and ignore the breadcrumb switcher", () => {
+	const booted = boot();
+	const sub = chip("untranslated catalog", { expanded: false });
+	sub.setAttribute("aria-haspopup", "dialog");
+	const count = node("span"); count.setAttribute("data-subagent-count", ""); sub.append(count);
+	const job = chip("untranslated jobs", { expanded: false });
+	const jobs = node("span"); jobs.setAttribute("data-job-count", ""); job.append(jobs);
+	const switcher = chip("Switch subagent: builder", { expanded: false });
+	switcher.setAttribute("aria-haspopup", "dialog");
+	const wrapper = node("div"); wrapper.setAttribute("data-subagent-action", ""); wrapper.append(switcher);
+	booted.document.body.append(wrapper);
+	decorateChips(booted, [sub, job, switcher]);
+	assert.equal(sub.getAttribute("data-rdsh-activity-chip"), "subagent");
+	assert.equal(job.getAttribute("data-rdsh-activity-chip"), "shell");
+	assert.equal(switcher.hasAttribute("data-rdsh-activity-chip"), false);
+	assert.equal(count.parentElement, sub);
+});
+
+test("rc.3 shared-task header, progress and footer survive sort and cleanup", () => {
+	const booted = boot();
+	const frame = appFrame(booted);
+	const popover = subagentPopover(booted);
+	popover.menu.setAttribute("data-subagent-panel", "");
+	const heading = node("div"); heading.setAttribute("data-subagent-section-header", "");
+	const title = node("h3"); title.textContent = "Shared team";
+	const progress = node("span"); progress.textContent = "1 / 3";
+	heading.append(title, progress); popover.menu.prepend(heading);
+	const footer = node("section"); footer.textContent = "Tasks / retry"; popover.menu.append(footer);
+	decorateFrame(booted, [frame.button]);
+	const toggle = sortToggleOf(booted);
+	assert.equal(toggle.parentElement, heading);
+	assert.equal(headingOf(booted), null, "do not duplicate the native header");
+	toggle.click(); booted.runFrames();
+	assert.equal(rowLabels(popover.tree)[0], "右パネル");
+	assert.equal(title.textContent, "Shared team");
+	assert.equal(progress.textContent, "1 / 3");
+	assert.equal(footer.parentElement, popover.menu);
+	decorateFrame(booted, [frame.button]);
+	assert.equal(sortToggleOf(booted), toggle, "do not rebuild the native header's toggle");
+	booted.dispose();
+	assert.equal(sortToggleOf(booted), null);
+	assert.equal(heading.parentElement, popover.menu);
+	assert.equal(progress.parentElement, heading);
+	assert.equal(footer.parentElement, popover.menu);
+});
+
 test("#82 the open subagent list gets its kind's name above it", () => {
 	const booted = boot();
 	const frame = appFrame(booted);

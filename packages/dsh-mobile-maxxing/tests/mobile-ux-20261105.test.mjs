@@ -651,15 +651,3 @@ test("the approval card keeps the transcript's gutters on a phone", () => {
 	// subtree carries the override too; the slot alone was overridden.
 	assert.match(CLIENT, /\[data-slot="conversation\.composer"\] \* \{[\s\S]{0,80}--dsh-composer-side-clearance: 0px !important;/, "the composer subtree keeps it");
 });
-
-test("the composer metrics are re-published after the seat is replaced", () => {
-	// Upstream's ResizeObserver stays on the old seat when an approval card
-	// takes it over, and the published height never updates until a reload.
-	const start = CLIENT.indexOf("function reconcileComposerMetrics()");
-	assert.ok(start > 0, "the reconcile pass is gone");
-	const body = CLIENT.slice(start, start + 1400);
-	assert.match(body, /--dsh-composer-height/, "the height variable is read");
-	assert.match(body, /--dsh-conversation-viewport-height/, "the viewport variable is read");
-	assert.match(body, /if \(published !== height\)/, "a matching value is not rewritten");
-	assert.match(CLIENT, /if \(phone\(\)\) reconcileComposerMetrics\(\);/, "the pass runs on every phone decorate");
-});

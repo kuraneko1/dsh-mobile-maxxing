@@ -40,6 +40,7 @@ function styleSheet(initial = {}) {
 		set maxWidth(value) {
 			properties.set("max-width", String(value));
 		},
+		setProperty(name, value) { properties.set(name, String(value)); },
 		removeProperty(name) {
 			properties.delete(name);
 		},
@@ -210,6 +211,25 @@ function fixture({ mobile = true, width = 390, visualWidth = width, insetLeft = 
 		},
 	};
 }
+
+test("rc.3 CSS anchors follow the safe band without inline position writes", () => {
+	const f = fixture({ width: 844, visualWidth: 320, viewportLeft: 40, insetLeft: 59, insetRight: 12 });
+	const { menu } = f.open({ left: "", width: 300 });
+	menu.style.setProperty("--dsh-model-anchor", "--native-model");
+	f.decorate();
+	assert.equal(menu.style.left, "");
+	assert.equal(menu.style.getPropertyValue("--dsh-model-anchor"), "--native-model");
+	assert.equal(menu.style.getPropertyValue("--rdsh-model-menu-safe-left"), "107px");
+	assert.equal(menu.style.getPropertyValue("--rdsh-model-menu-safe-right"), "504px");
+	assert.equal(menu.style.getPropertyValue("--rdsh-model-menu-safe-width"), "233px");
+	f.state.insetLeft = 0; f.state.visualWidth = 390; f.state.viewportLeft = 0;
+	f.band.fire("scroll");
+	assert.equal(menu.style.getPropertyValue("--rdsh-model-menu-safe-left"), "8px");
+	assert.equal(menu.style.getPropertyValue("--rdsh-model-menu-safe-width"), "362px");
+	f.clear();
+	assert.equal(menu.style.getPropertyValue("--rdsh-model-menu-safe-left"), "");
+	assert.equal(menu.style.getPropertyValue("--dsh-model-anchor"), "--native-model");
+});
 
 test("#84 a menu already inside the safe band keeps upstream's position", () => {
 	const f = fixture({ width: 844, insetLeft: 59 });
