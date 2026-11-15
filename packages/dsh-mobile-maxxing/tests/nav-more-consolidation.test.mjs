@@ -850,3 +850,63 @@ test("#92 a desktop boot injects nothing", () => {
 	assert.equal(env.document.querySelectorAll(FOLDED).length, 0);
 	env.dispose();
 });
+
+/**
+ * DSH 0.2.2-rc.3 wraps each stock panel button in an entry element that also
+ * holds the button's pin control, so the button is no longer a child of the
+ * nav. The Settings row starts inside the Automation entry: that is where the
+ * previous build left it after `auto.after(row)`.
+ */
+function makeEntryNav(env) {
+	const fixture = makeNav(env);
+	const { document } = env;
+	const wrap = (row) => {
+		const entry = document.createElement("div");
+		entry.className = "hHd-Xa_panelEntry hHd-Xa_panelEntryWide";
+		fixture.nav.insertBefore(entry, row);
+		entry.append(row);
+		const unpin = document.createElement("button");
+		unpin.type = "button";
+		unpin.className = "hHd-Xa_panelUnpin";
+		entry.append(unpin);
+		return entry;
+	};
+	const pluginsEntry = wrap(fixture.plugins);
+	const automationEntry = wrap(fixture.automation);
+	automationEntry.insertBefore(fixture.settings, automationEntry.children[1]);
+	return { ...fixture, pluginsEntry, automationEntry };
+}
+
+test("rc.3 portrait: the Settings row is its own nav row after the Automation entry", () => {
+	const env = boot({ mode: "mobile", width: 390 });
+	const fixture = makeEntryNav(env);
+	env.api.decorateNow();
+	assert.equal(fixture.settings.parentElement, fixture.nav, "the Settings row stayed inside a stock entry");
+	assert.equal(fixture.automationEntry.nextElementSibling, fixture.settings, "the Settings row does not follow the Automation entry");
+	assert.equal(fixture.automationEntry.contains(fixture.settings), false);
+	assert.equal(fixture.automation.parentElement, fixture.automationEntry, "the stock button was moved out of its entry");
+	// A repaint must leave the row where it is.
+	env.api.decorateNow();
+	assert.equal(fixture.automationEntry.nextElementSibling, fixture.settings);
+	assert.equal(fixture.nav.querySelectorAll("[data-rdsh-settings-row]").length, 1);
+	env.dispose();
+});
+
+test("rc.3 landscape folds the whole stock entries, pin controls included", () => {
+	const env = boot({ mode: "mobile", width: 1024 });
+	const fixture = makeEntryNav(env);
+	env.api.decorateNow();
+	const folded = fixture.nav.querySelectorAll(FOLDED);
+	assert.deepEqual(folded, [fixture.pluginsEntry, fixture.automationEntry, fixture.settings], "the folded nodes are not the three nav rows");
+	for (const button of [fixture.plugins, fixture.automation]) {
+		assert.equal(button.hasAttribute("data-rdsh-nav-more-hidden"), false, "a stock button was hidden inside a still-visible entry");
+	}
+	// The stock menu is still fed from the hidden stock buttons.
+	openShellMenu(env, fixture);
+	env.api.decorateNow();
+	assert.deepEqual(moreItems(env.document).map((item) => item.textContent), ["Plugins", "Automation tasks", "Settings"]);
+	moreItems(env.document)[1].click();
+	assert.equal(fixture.hits.automation, 1, "the Automation item did not click the hidden stock button");
+	env.dispose();
+	assert.equal(env.document.querySelectorAll(FOLDED).length, 0, "dispose left an entry folded");
+});

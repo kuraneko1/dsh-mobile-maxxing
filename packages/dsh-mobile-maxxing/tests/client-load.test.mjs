@@ -1525,6 +1525,9 @@ test("the four-row drawer survives decoration when the upstream nav exists", () 
 	newSession.setAttribute("aria-label", "New Session");
 	plugins.setAttribute("aria-label", "Plugins");
 	auto.setAttribute("aria-label", "Automation tasks");
+	// rc.2 and older: the stock panel buttons are direct children of the nav.
+	plugins.parentElement = nav;
+	auto.parentElement = nav;
 	let afterNode = null;
 	auto.after = (node) => {
 		afterNode = node;
@@ -1605,6 +1608,8 @@ test("a localized Settings row is never mistaken for the account menu", () => {
 	account.closest = (selector) => (selector.includes("yHnPSG_anchor") ? footer : null);
 	const settingsRow = () => createdButtons.find((button) => button.hasAttribute("data-rdsh-settings-row")) ?? null;
 	const allButtons = () => [newSession, plugins, auto, ...(settingsRow() === null ? [] : [settingsRow()]), account];
+	plugins.parentElement = nav;
+	auto.parentElement = nav;
 	auto.after = (node) => {
 		node.parentElement = nav;
 		auto.nextElementSibling = node;
