@@ -1804,6 +1804,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // ---------------------------------------------------------------------
     const NOTIFY_DEVICE_TURNS_KEY = "rdsh-mobile-ux:notify-device-turns";
     const ENTER_TO_SEND_KEY = "rdsh-mobile-ux:enter-to-send";
+    const MOTION_KEY = "dsh-mobile-maxxing:motion";
+    let motionQuery = null;
     const CONFIG = globalThis.__RDSH_MOBILE_UX_CONFIG__ && typeof globalThis.__RDSH_MOBILE_UX_CONFIG__ === "object"
       ? globalThis.__RDSH_MOBILE_UX_CONFIG__
       : {};
@@ -1920,6 +1922,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       deviceTheme: readDeviceTheme(),
       deviceThemeNote: "",
       terminalDark: readTerminalDark(),
+      motion: readMotion(),
       localPermission: readLocalPermission(),
       permissionOptions: [],
       permissionSharedDefault: "",
@@ -2444,6 +2447,39 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // are; nothing is written through `theme.setTheme`.
     // ---------------------------------------------------------------------
     let terminalDarkRuntime = null;
+
+    function effectiveMotion(preference, reduced) {
+      return preference === "standard" || preference === "reduced" || preference === "off"
+        ? preference : reduced ? "reduced" : "standard";
+    }
+
+    function readMotion() {
+      if (!phone()) return null;
+      try {
+        const value = localStorage.getItem(MOTION_KEY);
+        return effectiveMotion(value, false) === value ? value : null;
+      } catch { return null; }
+    }
+
+    function currentMotion() {
+      return effectiveMotion(state.motion, motionQuery?.matches === true);
+    }
+
+    function applyMotion() {
+      if (phone()) writeOwnedAttribute(document.documentElement, "data-rdsh-motion", currentMotion());
+    }
+
+    function writeMotion(value) {
+      if (!phone()) return;
+      const next = effectiveMotion(value, false) === value ? value : null;
+      try {
+        if (next === null) localStorage.removeItem(MOTION_KEY);
+        else localStorage.setItem(MOTION_KEY, next);
+      } catch { /* Keep the preference for this page in private mode. */ }
+      emit({ motion: next });
+      applyMotion();
+      if (currentMotion() !== "standard") clearTypingAnimations();
+    }
 
     function readTerminalDark() {
       try {
@@ -3574,6 +3610,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
     }
 
+    // Attribute no-ops still enqueue MutationObserver records in browsers.
+    function writeOwnedAttribute(node, name, value) {
+      const text = String(value);
+      if (node.getAttribute(name) !== text) node.setAttribute(name, text);
+    }
+
+    function removeOwnedAttribute(node, name) {
+      if (node.hasAttribute(name)) node.removeAttribute(name);
+    }
+
     function applyHideList(disabled) {
       const labels = hideLabels();
       // Hide the controls that dead-end on a mobile device. Desktop mode
@@ -3583,9 +3629,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const label = labelOf(element);
         if (label === "" || label.length > 48) continue;
         if (hideOnThisDevice && shouldHide(label, labels)) {
-          element.setAttribute("data-rdsh-hidden", "");
+          writeOwnedAttribute(element, "data-rdsh-hidden", "");
         } else {
-          element.removeAttribute("data-rdsh-hidden");
+          removeOwnedAttribute(element, "data-rdsh-hidden");
         }
       }
       const modal = document.querySelector('[data-shortcut-modal="settings"]');
@@ -3606,7 +3652,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             const isRow = /(^|_)(?:row|setting)(?:_|$)|dswsnd-row/.test(cls);
             const isButton = row.tagName === "BUTTON" || row.getAttribute("role") === "button";
             if (isRow || isButton) {
-              row.setAttribute("data-rdsh-setting-hidden", "");
+              writeOwnedAttribute(row, "data-rdsh-setting-hidden", "");
               rowHidden.add(row);
               break;
             }
@@ -3614,12 +3660,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           }
         }
         for (const row of modal.querySelectorAll("[data-rdsh-setting-hidden]")) {
-          if (!rowHidden.has(row)) row.removeAttribute("data-rdsh-setting-hidden");
+          if (!rowHidden.has(row)) removeOwnedAttribute(row, "data-rdsh-setting-hidden");
         }
       } else if (modal !== null) {
         // Leaving the phone (or turning hiding off) must not leave a stale
         // attribute behind for the next pass to trip over.
-        for (const row of modal.querySelectorAll("[data-rdsh-setting-hidden]")) row.removeAttribute("data-rdsh-setting-hidden");
+        for (const row of modal.querySelectorAll("[data-rdsh-setting-hidden]")) removeOwnedAttribute(row, "data-rdsh-setting-hidden");
       }
 
     }
@@ -3627,15 +3673,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function unringSessionTitle(title) {
       // The animated ring used to wrap the label in its own element; it no
       // longer does, so only the attribute it added is left to clear.
-      title.removeAttribute("data-rdsh-ringed");
+      removeOwnedAttribute(title, "data-rdsh-ringed");
     }
 
     function ringSessionRow(row) {
-      row.setAttribute("data-rdsh-ring-row", "");
+      writeOwnedAttribute(row, "data-rdsh-ring-row", "");
     }
 
     function unringSessionRow(row) {
-      row.removeAttribute("data-rdsh-ring-row");
+      removeOwnedAttribute(row, "data-rdsh-ring-row");
       const title = row.querySelector("[data-rdsh-session-title]");
       if (title !== null) unringSessionTitle(title);
     }
@@ -3720,9 +3766,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (classToken(node, /_list$/)) list = node;
       }
       for (const tagged of document.querySelectorAll("[data-rdsh-ring-list]")) {
-        if (tagged !== list) tagged.removeAttribute("data-rdsh-ring-list");
+        if (tagged !== list) removeOwnedAttribute(tagged, "data-rdsh-ring-list");
       }
-      if (list !== null && !list.hasAttribute("data-rdsh-ring-list")) list.setAttribute("data-rdsh-ring-list", "");
+      if (list !== null && !list.hasAttribute("data-rdsh-ring-list")) writeOwnedAttribute(list, "data-rdsh-ring-list", "");
     }
 
     function decorateSessionRows() {
@@ -3735,22 +3781,22 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
       rowHooksActive = true;
       for (const row of document.querySelectorAll('[data-row-key^="session:"]')) {
-        row.setAttribute("data-rdsh-session", "");
+        writeOwnedAttribute(row, "data-rdsh-session", "");
         const children = [...row.children];
         const status = children.find((child) => classToken(child, /_slot$/));
         const title = children.find((child) => classToken(child, /_title$/));
         if (status) {
-          status.setAttribute("data-rdsh-status", "");
+          writeOwnedAttribute(status, "data-rdsh-status", "");
           // Idle rows keep an empty 16px status slot; on a phone that width
           // belongs to the title.
-          if (status.children.length === 0 && (status.textContent || "").trim() === "") status.setAttribute("data-rdsh-status-empty", "");
-          else status.removeAttribute("data-rdsh-status-empty");
+          if (status.children.length === 0 && (status.textContent || "").trim() === "") writeOwnedAttribute(status, "data-rdsh-status-empty", "");
+          else removeOwnedAttribute(status, "data-rdsh-status-empty");
         }
-        if (title) title.setAttribute("data-rdsh-session-title", "");
+        if (title) writeOwnedAttribute(title, "data-rdsh-session-title", "");
         applySessionFrame(row);
         const running = row.querySelector('svg[data-state="ongoing"]') !== null;
-        if (running) row.setAttribute("data-rdsh-running", "");
-        else row.removeAttribute("data-rdsh-running");
+        if (running) writeOwnedAttribute(row, "data-rdsh-running", "");
+        else removeOwnedAttribute(row, "data-rdsh-running");
         // Only a running session sweeps. An open but idle session is marked
         // with the static frame below, so "open" never looks like "working".
         const selected = row.getAttribute("aria-selected") === "true";
@@ -3790,8 +3836,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         ?? buttons[0]
         ?? null;
       for (const button of buttons) {
-        if (button === menu) button.removeAttribute("data-rdsh-row-minor");
-        else button.setAttribute("data-rdsh-row-minor", "");
+        if (button === menu) removeOwnedAttribute(button, "data-rdsh-row-minor");
+        else writeOwnedAttribute(button, "data-rdsh-row-minor", "");
       }
     }
 
@@ -3859,6 +3905,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-sidebar",
       "data-rdsh-drawer",
       "data-rdsh-anim",
+      "data-rdsh-motion",
       "data-rdsh-safe-top",
       "data-rdsh-safe-bottom",
       "data-rdsh-safe-left",
@@ -4017,7 +4064,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       disposeTerminalKeys();
       clearTerminalFit();
       removeRightPanelHeading();
-      clearFloatShelf();
+      floatGuard = null;
     }
 
     /**
@@ -4826,103 +4873,26 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     // Store floats once most of the window leaves the screen; keep their content mounted.
-    const storedFloats = new Map();
-    let floatShelf = null;
+    // Retiring the feature must not strand persisted terminal tabs off-screen.
+    // dock() moves a pane's existing tabs; never close or stop their resources.
+    function dockLegacyFloatingTabs() {
+      if (!phone()) return;
+      const sidebar = optionalService("sidebarRight");
+      if (typeof sidebar?.dock !== "function") return;
+      const current = shownSessionId();
+      if (!current) return;
+      for (const pane of document.querySelectorAll("[data-dockkit-float]")) {
+        if (pane.closest("[hidden]") !== null) continue;
+        const owner = pane.closest("[data-sidebar-right-session]")?.getAttribute("data-sidebar-right-session");
+        const id = pane.getAttribute("data-dockkit-float");
+        if (owner !== current || !id) continue;
+        try { sidebar.dock(id); }
+        catch (error) { console.warn("[rdsh-mobile-ux] saved pane could not be docked", error); }
+      }
+    }
+
+    // Keep native tab drags inside the right panel; no floating-window UI.
     let floatGuard = null;
-
-    function clearFloatShelf() {
-      for (const float of storedFloats.keys()) float.removeAttribute("data-rdsh-float-stored");
-      storedFloats.clear();
-      floatShelf?.remove();
-      floatShelf = null;
-      floatGuard = null;
-    }
-
-    function updateFloatShelf() {
-      if (!live || !phone()) return;
-      for (const stale of document.querySelectorAll(".rdsh-mux-reset-floats")) stale.remove();
-      for (const [float] of storedFloats) if (!float.isConnected) storedFloats.delete(float);
-      for (const float of document.querySelectorAll("[data-dockkit-float]")) {
-        if (storedFloats.has(float) || float.closest("[hidden]") !== null) continue;
-        const rect = float.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0 && (rect.left <= -rect.width / 2 || rect.right >= window.innerWidth + rect.width / 2 || rect.top <= -rect.height / 2 || rect.bottom >= window.innerHeight + rect.height / 2)) {
-          storedFloats.set(float, (float.querySelector("[data-dockkit-float-title]")?.textContent || t("mux.floatingWindows")).trim());
-          float.setAttribute("data-rdsh-float-stored", "");
-        }
-      }
-      const current = [...storedFloats].filter(([float]) => float.closest("[hidden]") === null);
-      if (!current.length) { floatShelf?.remove(); floatShelf = null; return; }
-      if (!floatShelf) {
-        floatShelf = document.createElement("div");
-        floatShelf.className = "rdsh-float-shelf";
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "rdsh-float-shelf-button";
-        button.setAttribute("aria-label", t("mux.floatingWindows"));
-        button.setAttribute("aria-expanded", "false");
-        button.textContent = "▣";
-        const list = document.createElement("div");
-        list.className = "rdsh-float-shelf-list";
-        list.hidden = true;
-        let suppressClick = false;
-        button.addEventListener("click", () => {
-          if (suppressClick) { suppressClick = false; return; }
-          list.hidden = !list.hidden;
-          button.setAttribute("aria-expanded", String(!list.hidden));
-          const rect = button.getBoundingClientRect();
-          list.style.left = Math.max(8, Math.min(window.innerWidth - 180, rect.left)) + "px";
-          list.style.top = Math.max(8, Math.min(window.innerHeight - Math.min(window.innerHeight / 2, list.children.length * 40 + 12) - 8, rect.bottom + 4)) + "px";
-        });
-        let drag = null;
-        button.addEventListener("pointerdown", (event) => { suppressClick = false; drag = { x: event.clientX, y: event.clientY, left: floatShelf.getBoundingClientRect().left, top: floatShelf.getBoundingClientRect().top, moved: false }; button.setPointerCapture?.(event.pointerId); });
-        button.addEventListener("pointermove", (event) => {
-          if (!drag) return;
-          const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
-          if (Math.abs(dx) + Math.abs(dy) < 8 && !drag.moved) return;
-          drag.moved = true;
-          floatShelf.style.left = Math.max(0, Math.min(window.innerWidth - 48, drag.left + dx)) + "px";
-          floatShelf.style.top = Math.max(0, Math.min(window.innerHeight - 48, drag.top + dy)) + "px";
-        });
-        button.addEventListener("pointerup", (event) => { if (drag?.moved) { event.preventDefault(); suppressClick = true; } drag = null; });
-        button.addEventListener("pointercancel", () => { drag = null; });
-        floatShelf.append(button, list);
-        document.body.append(floatShelf);
-      }
-      const list = floatShelf.querySelector(".rdsh-float-shelf-list");
-      if (list._rdshFloats?.length === current.length && current.every(([float, title], i) => list._rdshFloats[i][0] === float && list._rdshFloats[i][1] === title)) return;
-      list._rdshFloats = current;
-      list.replaceChildren();
-      for (const [float, title] of current) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.textContent = title;
-        button.addEventListener("click", () => {
-          const rect = float.getBoundingClientRect();
-          const parent = float.offsetParent?.getBoundingClientRect() || { left: 0, top: 0 };
-          const x = Math.max(0, Math.min(window.innerWidth - rect.width, rect.left));
-          const y = Math.max(0, Math.min(window.innerHeight - rect.height, rect.top));
-          const service = optionalService("sidebarRight");
-          const session = float.closest("[data-sidebar-right-session]")?.getAttribute("data-sidebar-right-session");
-          const pane = float.getAttribute("data-dockkit-float");
-          const actions = service?.actionsFor?.(session);
-          float.style.left = (x - parent.left) + "px";
-          float.style.top = (y - parent.top) + "px";
-          if (actions?.resizeFloat && pane && (rect.width > window.innerWidth || rect.height > window.innerHeight)) {
-            actions.resizeFloat(session, pane, { x: x - parent.left, y: y - parent.top, width: Math.min(rect.width, window.innerWidth), height: Math.min(rect.height, window.innerHeight) });
-          } else if (actions?.moveFloat && pane) {
-            actions.moveFloat(session, pane, x - parent.left, y - parent.top);
-          } else {
-            if (rect.width > window.innerWidth) float.style.width = window.innerWidth + "px";
-            if (rect.height > window.innerHeight) float.style.height = window.innerHeight + "px";
-          }
-          storedFloats.delete(float);
-          float.removeAttribute("data-rdsh-float-stored");
-          list.hidden = true;
-          updateFloatShelf();
-        });
-        list.append(button);
-      }
-    }
 
     function removeRightPanelHeading() {
       for (const stale of document.querySelectorAll("[data-rdsh-panel-heading]")) {
@@ -5022,6 +4992,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       return `${formatTokenCount(used)}/${formatTokenCount(window)}`;
     }
 
+    let settingsStyle = null;
     let settingsArrows = null;
     let settingsTabResetPending = false;
 
@@ -5098,6 +5069,18 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
       state.left.remove();
       state.right.remove();
+    }
+
+    function syncSettingsStyle(modal) {
+      if (!phone() || modal === null) {
+        settingsStyle?.remove();
+        settingsStyle = null;
+      } else if (settingsStyle === null) {
+        settingsStyle = document.createElement("style");
+        settingsStyle.setAttribute("data-rdsh-mux-style", "settings");
+        settingsStyle.textContent = CSS_SETTINGS;
+        document.head.append(settingsStyle);
+      }
     }
 
     function installSettingsNavArrows() {
@@ -5901,7 +5884,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function decorateSessionTitleTyping() {
-      if (!phone()) {
+      if (!phone() || currentMotion() !== "standard") {
         clearTypingAnimations();
         return;
       }
@@ -7684,6 +7667,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         for (const tagged of document.querySelectorAll("[data-rdsh-hit44]")) tagged.removeAttribute("data-rdsh-hit44");
         return;
       }
+      const pending = [];
       for (const button of document.querySelectorAll(TAP_TARGET_CANDIDATES)) {
         if (button.hasAttribute("data-rdsh-hit44")) continue;
         if (button.closest(TAP_TARGET_EXCLUDE) !== null) continue;
@@ -7695,8 +7679,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // 24-32px: the chrome's icon buttons. A smaller control (a tab's 20px
         // close affordance) would have its overlay swallow the tab it sits on.
         if (!(rect.width >= 24 && rect.height >= 24 && rect.width <= 32 && rect.height <= 32)) continue;
-        button.setAttribute("data-rdsh-hit44", "");
+        pending.push(button);
       }
+      // Read every rectangle before a marker write invalidates style.
+      for (const button of pending) button.setAttribute("data-rdsh-hit44", "");
     }
 
     function markScrollers() {
@@ -7704,13 +7690,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         clearOwnedAttribute("data-rdsh-scroll");
         return;
       }
+      const pending = [];
       for (const element of document.querySelectorAll("[data-rdsh-frame] div")) {
         if (element.hasAttribute("data-rdsh-scroll")) continue;
-        if (element.scrollHeight <= element.clientHeight + 4) continue;
         const overflow = getComputedStyle(element).overflowY;
         if (overflow !== "auto" && overflow !== "scroll") continue;
-        element.setAttribute("data-rdsh-scroll", "");
+        if (element.scrollHeight <= element.clientHeight + 4) continue;
+        pending.push(element);
       }
+      for (const element of pending) element.setAttribute("data-rdsh-scroll", "");
     }
 
     let lastSlowAt = 0;
@@ -7793,18 +7781,18 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const root = frame();
       if (root !== null) {
         if (onPhone) {
-          root.setAttribute("data-rdsh-frame", "");
+          writeOwnedAttribute(root, "data-rdsh-frame", "");
           // The app switches these columns to auto-placement while its sidebar is
           // open. Our drawer takes that column out of flow, so auto-placement
           // shifts everything one column left: the chat lands on the 0px column
           // and the empty right column fills the screen. Pin them instead.
           for (const child of root.children) {
             const cls = typeof child.className === "string" ? child.className : "";
-            if (cls.includes("_centerCol")) child.setAttribute("data-rdsh-center-col", "");
-            else if (cls.includes("_rightbarCol")) child.setAttribute("data-rdsh-rightbar-col", "");
+            if (cls.includes("_centerCol")) writeOwnedAttribute(child, "data-rdsh-center-col", "");
+            else if (cls.includes("_rightbarCol")) writeOwnedAttribute(child, "data-rdsh-rightbar-col", "");
           }
           const sidebar = document.querySelector('[data-slot="sidebar"]');
-          if (sidebar && sidebar.parentElement) sidebar.parentElement.setAttribute("data-rdsh-sidebar", "");
+          if (sidebar && sidebar.parentElement) writeOwnedAttribute(sidebar.parentElement, "data-rdsh-sidebar", "");
         } else {
           for (const attribute of ["data-rdsh-frame", "data-rdsh-center-col", "data-rdsh-rightbar-col", "data-rdsh-sidebar", "data-rdsh-drawer"]) {
             clearOwnedAttribute(attribute);
@@ -7819,23 +7807,25 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (onPhone) syncLastSession();
       const header = document.querySelector("header[data-window-drag]");
       if (header !== null) {
-        if (onPhone) header.setAttribute("data-rdsh-header", "");
-        else header.removeAttribute("data-rdsh-header");
+        if (onPhone) writeOwnedAttribute(header, "data-rdsh-header", "");
+        else removeOwnedAttribute(header, "data-rdsh-header");
       }
       if (onPhone) {
         if (document.documentElement.getAttribute("data-rdsh-anim") !== ANIMATION) {
-          document.documentElement.setAttribute("data-rdsh-anim", ANIMATION);
+          writeOwnedAttribute(document.documentElement, "data-rdsh-anim", ANIMATION);
         }
       } else {
-        document.documentElement.removeAttribute("data-rdsh-anim");
+        removeOwnedAttribute(document.documentElement, "data-rdsh-anim");
       }
+      applyMotion();
+      syncSettingsStyle(onPhone ? document.querySelector('[data-shortcut-modal="settings"]') : null);
       // Decorate the image lightbox on the same mutation that creates it. The
       // slow pass is throttled (900ms), which can leave a freshly opened
       // lightbox without the crop/safe-area hooks.
       decorateLightbox();
       decorateRightPanel();
       decorateRightPanelTabs();
-      updateFloatShelf();
+      dockLegacyFloatingTabs();
 
       decorateTerminalKeys();
       decorateWorkspaceFiles();
@@ -7854,9 +7844,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       enforceNoZoomViewport();
       if (onPhone) {
         const crumbs = sessionHierarchy();
-        if (crumbs !== null) crumbs.setAttribute("data-rdsh-crumbs", "");
+        if (crumbs !== null) writeOwnedAttribute(crumbs, "data-rdsh-crumbs", "");
         for (const slot of document.querySelectorAll('[data-slot="main.conversation"], [data-slot="conversation"]')) {
-          slot.setAttribute("data-rdsh-conversation", "");
+          writeOwnedAttribute(slot, "data-rdsh-conversation", "");
         }
       } else {
         clearOwnedAttribute("data-rdsh-crumbs");
@@ -7959,8 +7949,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       ensureRightPanelFits();
     }
 
-    function decorate() {
-      decorateFast();
+    function decorate(runFast = true) {
+      if (runFast) decorateFast();
       const now = Date.now();
       if (now - lastSlowAt > 900) {
         lastSlowAt = now;
@@ -7975,11 +7965,24 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      */
     let live = false;
     let scheduled = false;
+    let fastDirty = true;
     /** Minimum gap between decorate passes; streaming used to run 30-60/s. */
     const DECORATE_MIN_MS = 120;
     let lastDecorateAt = 0;
 
-    function scheduleDecorate() {
+    // Plain streaming text cannot introduce a new mobile control. Structural,
+    // header, input and non-chat mutations still run the full fast pass.
+    function needsFastPass(record) {
+      if (record?.type !== "childList") return true;
+      const target = record.target;
+      if (!target || !["P", "PRE", "CODE"].includes(target.tagName)) return true;
+      if (!target.closest?.("[data-rdsh-center-col]")) return true;
+      if (target.closest("button, a, input, textarea, [contenteditable=true], [data-rdsh-header]")) return true;
+      return [...(record.addedNodes || []), ...(record.removedNodes || [])].some(node => node.nodeType !== 3);
+    }
+
+    function scheduleDecorate(options) {
+      if (options?.fast !== false) fastDirty = true;
       if (!live || scheduled) return;
       scheduled = true;
       // The flag clears before the pass runs, so a pass that bails out (a
@@ -7989,8 +7992,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (!live) return;
         lastDecorateAt = Date.now();
         try {
-          decorate();
+          const runFast = fastDirty;
+          fastDirty = false;
+          decorate(runFast);
         } catch (error) {
+          fastDirty = true; // Retry the full pass after a transient service failure.
           console.error("[rdsh-mobile-ux] decorate failed", error);
         }
       };
@@ -10811,7 +10817,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         }
         floatGuard = null;
       }
-      if (phone() && event.target?.closest?.("[data-dockkit-float]")) setTimeout(updateFloatShelf, 100);
       cancelQueuePress();
       cancelLongPress();
       if (stripPanCandidate !== null && (stripPanCandidate.pointerId === undefined || event.pointerId === undefined || event.pointerId === stripPanCandidate.pointerId)) {
@@ -10927,12 +10932,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * A rightward swipe that starts on content already scrolled to the right
      * belongs to that content, not to the sheet's close gesture.
      */
-    function scrolledLeftAncestor(target) {
+    function scrolledLeftAncestor(target, anyHorizontal = false) {
       let node = target;
       while (node !== null && node !== undefined && node !== document.body) {
         if (node.nodeType === 1) {
           const style = getComputedStyle(node);
-          if ((style.overflowX === "auto" || style.overflowX === "scroll") && node.scrollLeft > 1) return node;
+          if ((style.overflowX === "auto" || style.overflowX === "scroll") &&
+              (node.scrollLeft > 1 || (anyHorizontal && node.scrollWidth > node.clientWidth + 4))) return node;
         }
         node = node.parentElement;
       }
@@ -11198,8 +11204,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (document.querySelector("[data-rdsh-lightbox], [data-rdsh-crop-overlay], [data-shortcut-modal=settings]") !== null) return;
       const touch = event.touches[0];
       const target = event.target;
-      const fromRight = touch.clientX >= window.innerWidth - 36;
       const drawerOpen = document.documentElement.getAttribute("data-rdsh-drawer") === "open";
+      // #74: Android OS Back owns the physical edge. Start farther inside,
+      // without changing iOS or the already-open drawer closing gesture.
+      const openingWidth = /Android/i.test(navigator.userAgent || "") ? window.innerWidth / 2 : 36;
+      const fromRight = touch.clientX >= window.innerWidth - (drawerOpen ? 36 : openingWidth);
       // Read the panel state from the app's own marker as well: the tagged
       // attribute lands with the next decorate pass, and a swipe in that gap
       // used to open the drawer on top of a panel the user was looking at.
@@ -11231,7 +11240,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // used to hand that swipe to the drawer.
         const dockRect = rightPanelNode === null || rightPanelNode === undefined ? null : rightPanelNode.getBoundingClientRect();
         const docked = dockRect !== null && dockRect.width > 0 && dockRect.left >= EDGE_SUPPRESS_PX;
-        const inLeftEdge = !fromRight && touch.clientX <= 36 && docked;
+        const inLeftEdge = !fromRight && touch.clientX <= openingWidth && docked;
         if (!inLeftEdge) {
           // #59: a docked panel (landscape) shares the screen with the
           // conversation. Only a swipe that starts on the panel closes it; a
@@ -11252,13 +11261,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight: false, closesDrawer: true };
         return;
       }
-      if (!fromRight && touch.clientX > 36) return;
+      if (!fromRight && touch.clientX > openingWidth) return;
       if (target instanceof Element) {
         // Form fields always own the gesture. At the left edge a button may be
         // the route's full-width row: a tap is still a tap (no movement means
         // no preventDefault), while a rightward drag must open the drawer.
         if (target.closest("input, textarea, [contenteditable=true]") !== null) return;
         if (touch.clientX > 36 && target.closest("button, a, [role=button]") !== null) return;
+        const interior = openingWidth > 36 && touch.clientX > 36 && touch.clientX < window.innerWidth - 36;
+        if (interior && (target.closest("select, .xterm, [class*='xterm']") !== null || scrolledLeftAncestor(target, true) !== null)) return;
       }
       // A full-screen route detail replaces the chat, so the left-edge swipe
       // there is the screen's own back gesture, not the drawer's (#61, #62).
@@ -11879,8 +11890,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       section.removeEventListener("keydown", onSpecialKeyTextKeyDown, true);
       section.removeEventListener("beforeinput", onSpecialKeyBeforeInput, true);
       if (typeof state.disposeAutofocus === "function") state.disposeAutofocus();
-      const mount = section.querySelector(".xterm")?.parentElement;
-      if (mount && section.hasAttribute("data-rdsh-terminal-virtual")) { mount.style.removeProperty("zoom"); mount.style.removeProperty("width"); mount.style.removeProperty("max-width"); mount.style.removeProperty("box-sizing"); section.removeAttribute("data-rdsh-terminal-virtual"); }
       state.row.remove();
       return true;
     }
@@ -14921,6 +14930,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             t("localDisplay.terminalDark"),
           ),
           h("p", { className: "rdsh-mux-note" }, t("localDisplay.terminalDark.note")),
+          h("label", { className: "rdsh-mux-slider" },
+            h("span", null, t("motion.title")),
+            h("select", { className: "rdsh-mux-select", value: effectiveMotion(s.motion, motionQuery?.matches === true), onChange: event => writeMotion(event.target.value) },
+              ...["standard", "reduced", "off"].map(value => h("option", { key: value, value }, t(`motion.${value}`))))),
+          h("p", { className: "rdsh-mux-note" }, t("motion.note")),
         ),
       );
     }
@@ -15099,7 +15113,167 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       .map((label) => `[data-rdsh-rightpanel] [aria-label="${cssValue(label)}"]`)
       .join(", ");
 
+    // Loaded only while Settings is mounted; omit this parse from chat boot.
+    const CSS_SETTINGS = `
+  /* Settings: full screen, stacked navigation, nothing narrowed. */
+  /* Close lives on the top row with the Settings title, as a round button. */
+  [data-shortcut-modal="settings"] [data-rdsh-settings-close] {
+    position: fixed !important;
+    top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
+    right: calc(env(safe-area-inset-right, 0px) + 12px) !important;
+    width: 36px !important; height: 36px !important;
+    padding: 0 !important;
+    display: grid !important; place-items: center !important;
+    border: .5px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12)) !important;
+    border-radius: 50% !important;
+    background: var(--dsw-alias-button-floating-fill, #fff) !important;
+    color: var(--dsw-alias-label-primary) !important;
+    box-shadow: var(--dsw-shadow-lv2, 0 2px 8px rgba(0,0,0,.08));
+    z-index: 1007 !important;
+  }
+  [data-shortcut-modal="settings"] [data-rdsh-settings-close]:hover { background: var(--dsw-alias-button-floating-hover, #f1f3f5) !important; }
+  [data-shortcut-modal="settings"] [data-rdsh-settings-close] svg { width: 18px !important; height: 18px !important; }
+
+  /* Tab names fade toward a scrollable edge, so the floating arrows never
+     sit on top of a hard-cut label. The flags are set by positionSettingsArrows. */
+  [data-shortcut-modal="settings"] [class*="VOzbGW_navList"][data-rdsh-fade-left] {
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 64px);
+    mask-image: linear-gradient(to right, transparent 0, #000 64px);
+  }
+  [data-shortcut-modal="settings"] [class*="VOzbGW_navList"][data-rdsh-fade-right] {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 72px), transparent 100%);
+    mask-image: linear-gradient(to right, #000 calc(100% - 72px), transparent 100%);
+  }
+  [data-shortcut-modal="settings"] [class*="VOzbGW_navList"][data-rdsh-fade-left][data-rdsh-fade-right] {
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 64px, #000 calc(100% - 72px), transparent 100%);
+    mask-image: linear-gradient(to right, transparent 0, #000 64px, #000 calc(100% - 72px), transparent 100%);
+  }
+
+  /* The settings panel is fully opaque on a phone; the blurred mask was the
+     source of the iOS flash on each tab repaint. */
+  [data-shortcut-modal="settings"] [class*="VOzbGW_mask"] {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+  [data-shortcut-modal="settings"],
+  [data-shortcut-modal="settings"] [class*="VOzbGW_options"] {
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+  }
+
+  [data-shortcut-modal="settings"] {
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: 100% !important;
+    max-height: none !important;
+    border-radius: 0 !important;
+    box-sizing: border-box !important;
+    flex-direction: column;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    /* #59: the sheet is viewport-anchored, so it pads the notch sides itself. */
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+  [data-shortcut-modal="settings"] > nav {
+    width: 100%; padding: 16px 12px 0; gap: 8px;
+    border-bottom: .5px solid var(--dsw-alias-border-l2, rgba(255,255,255,.12));
+  }
+  [data-shortcut-modal="settings"] > nav > div:last-child {
+    flex-direction: row; overflow-x: auto; overflow-y: hidden; gap: 6px;
+    margin-top: 10px; padding-bottom: 10px;
+    scrollbar-width: none;
+    border-top: .5px solid var(--dsw-alias-border-l2, rgba(255,255,255,.12));
+  }
+  [data-shortcut-modal="settings"] > nav > div:last-child::-webkit-scrollbar { display: none; }
+  [data-shortcut-modal="settings"] > nav > div:last-child button { flex: none; }
+  [data-shortcut-modal="settings"] > nav + div { min-height: 0; }
+  /* The close is fixed to the title row now; the old header row only held
+     "Open configuration file" (a desktop action). Collapse it so the content
+     begins directly at the tab strip. Tied to the hide list: with "stop
+     hiding" the header (and that action) comes back, which is also how the
+     debug switch can be checked. A desktop has no
+     data-rdsh-hide-settings, so it keeps the stock header (#17). */
+  html[data-rdsh-hide-settings] [data-shortcut-modal="settings"] > nav + div > div:first-child {
+    height: 0 !important; min-height: 0 !important; padding: 0 !important;
+    overflow: visible;
+  }
+  html[data-rdsh-hide-settings] [data-shortcut-modal="settings"] > nav + div > div:first-child [class*="VOzbGW_actions"] { display: none !important; }
+  [data-shortcut-modal="settings"] > nav + div > div:last-child { padding: 0 12px 16px; }
+
+  /* Settings: theme tiles side by side, never crushed. */
+  [data-shortcut-modal="settings"] [class*="_8HJdBW_group"] { align-items: stretch !important; }
+  [data-shortcut-modal="settings"] [class*="_8HJdBW_cubeRow"] {
+    flex-direction: row !important; flex-wrap: nowrap !important;
+    height: auto !important; align-items: stretch !important; gap: 8px !important;
+  }
+  [data-shortcut-modal="settings"] [class*="_8HJdBW_cubeRow"] > * {
+    flex: 1 1 0 !important; width: auto !important; min-width: 0 !important;
+    height: auto !important; min-height: 88px !important;
+    padding: 12px 6px !important; box-sizing: border-box !important;
+  }
+  [data-shortcut-modal="settings"] [class*="_8HJdBW_cubeRow"] > * > * { max-width: 100%; }
+
+  /* Rows matched by the hide list are hidden by
+     html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] above. There is
+     deliberately no blanket rule over upstream row classes: it hid whole
+     groups regardless of their label, which is what #17 reported. */
+
+  /* Settings: no accidental horizontal scrolling in tab panels. */
+  [data-shortcut-modal="settings"] [class*="VOzbGW_options"] {
+    overflow-x: hidden !important;
+    scrollbar-gutter: stable;
+  }
+  [data-shortcut-modal="settings"] [class*="rtSEdW_section"],
+  [data-shortcut-modal="settings"] [class*="rtSEdW_group"],
+  [data-shortcut-modal="settings"] [class*="rtSEdW_cards"],
+  [data-shortcut-modal="settings"] [class*="rtSEdW_card"],
+  [data-shortcut-modal="settings"] [class*="rtSEdW_cardFoot"] {
+    min-width: 0 !important; max-width: 100% !important; box-sizing: border-box !important;
+  }
+  [data-shortcut-modal="settings"] [class*="rtSEdW_cardFoot"] { flex-wrap: wrap !important; overflow: hidden; }
+  [data-shortcut-modal="settings"] [class*="rtSEdW_iconButton"] { overflow: hidden; }
+
+  /* Settings > Models: shrink provider names, never collide with actions. */
+  [data-shortcut-modal="settings"] [class*="zGbnIq_rowCard"] { min-width: 0 !important; max-width: 100% !important; box-sizing: border-box !important; }
+  [data-shortcut-modal="settings"] [class*="zGbnIq_rowHead"] { min-width: 0 !important; gap: 8px !important; }
+  [data-shortcut-modal="settings"] [class*="zGbnIq_rowIdentity"] { min-width: 0 !important; overflow: hidden; }
+  [data-shortcut-modal="settings"] [class*="zGbnIq_rowName"] { min-width: 0 !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  [data-shortcut-modal="settings"] [class*="zGbnIq_rowActions"] { flex-shrink: 0; gap: 6px; }
+  [data-shortcut-modal="settings"] [class*="zGbnIq_rowActions"] button { padding-left: 10px !important; padding-right: 10px !important; }
+  /* Settings > Models: the two-step "Add provider" tabs wrap instead of
+     running off the card. The primitive tab is nowrap and the panel has no
+     scroller of its own (overflow-x is hidden above), so a long ja label
+     overflowed the card with no way to reach it (#100). */
+  [data-shortcut-modal="settings"] [class*="zGbnIq_addModes"] { min-width: 0; max-width: 100%; }
+  [data-shortcut-modal="settings"] [class*="zGbnIq_addModes"] > [role="tablist"] {
+    max-width: 100% !important;
+    grid-auto-columns: minmax(0, 1fr) !important; box-sizing: border-box;
+  }
+  [data-shortcut-modal="settings"] [class*="zGbnIq_addModes"] > [role="tablist"] > [role="tab"] {
+    white-space: normal !important; height: auto !important; min-height: 28px; padding: 4px 10px !important;
+  }
+
+`;
+
     const CSS_PHONE = `
+html[data-rdsh-motion] { --rdsh-anim-duration: .15s; --rdsh-anim-repeat: infinite; }
+html[data-rdsh-motion="reduced"] { --rdsh-anim-duration: .08s; --rdsh-anim-repeat: 1; }
+html[data-rdsh-motion="off"] { --rdsh-anim-duration: .001ms; --rdsh-anim-repeat: 1; }
+html[data-rdsh-motion="reduced"] *, html[data-rdsh-motion="reduced"] *::before, html[data-rdsh-motion="reduced"] *::after,
+html[data-rdsh-motion="off"] *, html[data-rdsh-motion="off"] *::before, html[data-rdsh-motion="off"] *::after {
+  animation-duration: var(--rdsh-anim-duration) !important;
+  animation-iteration-count: var(--rdsh-anim-repeat) !important;
+  animation-delay: 0s !important;
+  transition-duration: var(--rdsh-anim-duration) !important;
+  transition-delay: 0s !important;
+}
+html[data-rdsh-motion="off"] * { scroll-behavior: auto !important; }
+
 @property --rdsh-question-angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
 @keyframes rdsh-question-glow { to { --rdsh-question-angle: 360deg; } }
 html[data-rdsh-device-mode="mobile"] body > [role="alert"]:has([data-rdsh-notice-icon]) { max-width: calc(100vw - 32px); box-sizing: border-box; }
@@ -16134,149 +16308,6 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   }
   .rdsh-activity-sort:active { opacity: .72; }
 
-  /* Settings: full screen, stacked navigation, nothing narrowed. */
-  /* Close lives on the top row with the Settings title, as a round button. */
-  [data-shortcut-modal="settings"] [data-rdsh-settings-close] {
-    position: fixed !important;
-    top: calc(env(safe-area-inset-top, 0px) + 12px) !important;
-    right: calc(env(safe-area-inset-right, 0px) + 12px) !important;
-    width: 36px !important; height: 36px !important;
-    padding: 0 !important;
-    display: grid !important; place-items: center !important;
-    border: .5px solid var(--dsw-alias-border-l3, rgba(0,0,0,.12)) !important;
-    border-radius: 50% !important;
-    background: var(--dsw-alias-button-floating-fill, #fff) !important;
-    color: var(--dsw-alias-label-primary) !important;
-    box-shadow: var(--dsw-shadow-lv2, 0 2px 8px rgba(0,0,0,.08));
-    z-index: 1007 !important;
-  }
-  [data-shortcut-modal="settings"] [data-rdsh-settings-close]:hover { background: var(--dsw-alias-button-floating-hover, #f1f3f5) !important; }
-  [data-shortcut-modal="settings"] [data-rdsh-settings-close] svg { width: 18px !important; height: 18px !important; }
-
-  /* Tab names fade toward a scrollable edge, so the floating arrows never
-     sit on top of a hard-cut label. The flags are set by positionSettingsArrows. */
-  [data-shortcut-modal="settings"] [class*="VOzbGW_navList"][data-rdsh-fade-left] {
-    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 64px);
-    mask-image: linear-gradient(to right, transparent 0, #000 64px);
-  }
-  [data-shortcut-modal="settings"] [class*="VOzbGW_navList"][data-rdsh-fade-right] {
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 72px), transparent 100%);
-    mask-image: linear-gradient(to right, #000 calc(100% - 72px), transparent 100%);
-  }
-  [data-shortcut-modal="settings"] [class*="VOzbGW_navList"][data-rdsh-fade-left][data-rdsh-fade-right] {
-    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 64px, #000 calc(100% - 72px), transparent 100%);
-    mask-image: linear-gradient(to right, transparent 0, #000 64px, #000 calc(100% - 72px), transparent 100%);
-  }
-
-  /* The settings panel is fully opaque on a phone; the blurred mask was the
-     source of the iOS flash on each tab repaint. */
-  [data-shortcut-modal="settings"] [class*="VOzbGW_mask"] {
-    -webkit-backdrop-filter: none !important;
-    backdrop-filter: none !important;
-  }
-  [data-shortcut-modal="settings"],
-  [data-shortcut-modal="settings"] [class*="VOzbGW_options"] {
-    -webkit-transform: translateZ(0);
-    transform: translateZ(0);
-    -webkit-backface-visibility: hidden;
-    backface-visibility: hidden;
-  }
-
-  [data-shortcut-modal="settings"] {
-    position: absolute !important;
-    inset: 0 !important;
-    width: 100% !important;
-    max-width: none !important;
-    height: 100% !important;
-    max-height: none !important;
-    border-radius: 0 !important;
-    box-sizing: border-box !important;
-    flex-direction: column;
-    padding-top: env(safe-area-inset-top, 0px);
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-    /* #59: the sheet is viewport-anchored, so it pads the notch sides itself. */
-    padding-left: env(safe-area-inset-left, 0px);
-    padding-right: env(safe-area-inset-right, 0px);
-  }
-  [data-shortcut-modal="settings"] > nav {
-    width: 100%; padding: 16px 12px 0; gap: 8px;
-    border-bottom: .5px solid var(--dsw-alias-border-l2, rgba(255,255,255,.12));
-  }
-  [data-shortcut-modal="settings"] > nav > div:last-child {
-    flex-direction: row; overflow-x: auto; overflow-y: hidden; gap: 6px;
-    margin-top: 10px; padding-bottom: 10px;
-    scrollbar-width: none;
-    border-top: .5px solid var(--dsw-alias-border-l2, rgba(255,255,255,.12));
-  }
-  [data-shortcut-modal="settings"] > nav > div:last-child::-webkit-scrollbar { display: none; }
-  [data-shortcut-modal="settings"] > nav > div:last-child button { flex: none; }
-  [data-shortcut-modal="settings"] > nav + div { min-height: 0; }
-  /* The close is fixed to the title row now; the old header row only held
-     "Open configuration file" (a desktop action). Collapse it so the content
-     begins directly at the tab strip. Tied to the hide list: with "stop
-     hiding" the header (and that action) comes back, which is also how the
-     debug switch can be checked. A desktop has no
-     data-rdsh-hide-settings, so it keeps the stock header (#17). */
-  html[data-rdsh-hide-settings] [data-shortcut-modal="settings"] > nav + div > div:first-child {
-    height: 0 !important; min-height: 0 !important; padding: 0 !important;
-    overflow: visible;
-  }
-  html[data-rdsh-hide-settings] [data-shortcut-modal="settings"] > nav + div > div:first-child [class*="VOzbGW_actions"] { display: none !important; }
-  [data-shortcut-modal="settings"] > nav + div > div:last-child { padding: 0 12px 16px; }
-
-  /* Settings: theme tiles side by side, never crushed. */
-  [data-shortcut-modal="settings"] [class*="_8HJdBW_group"] { align-items: stretch !important; }
-  [data-shortcut-modal="settings"] [class*="_8HJdBW_cubeRow"] {
-    flex-direction: row !important; flex-wrap: nowrap !important;
-    height: auto !important; align-items: stretch !important; gap: 8px !important;
-  }
-  [data-shortcut-modal="settings"] [class*="_8HJdBW_cubeRow"] > * {
-    flex: 1 1 0 !important; width: auto !important; min-width: 0 !important;
-    height: auto !important; min-height: 88px !important;
-    padding: 12px 6px !important; box-sizing: border-box !important;
-  }
-  [data-shortcut-modal="settings"] [class*="_8HJdBW_cubeRow"] > * > * { max-width: 100%; }
-
-  /* Rows matched by the hide list are hidden by
-     html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] above. There is
-     deliberately no blanket rule over upstream row classes: it hid whole
-     groups regardless of their label, which is what #17 reported. */
-
-  /* Settings: no accidental horizontal scrolling in tab panels. */
-  [data-shortcut-modal="settings"] [class*="VOzbGW_options"] {
-    overflow-x: hidden !important;
-    scrollbar-gutter: stable;
-  }
-  [data-shortcut-modal="settings"] [class*="rtSEdW_section"],
-  [data-shortcut-modal="settings"] [class*="rtSEdW_group"],
-  [data-shortcut-modal="settings"] [class*="rtSEdW_cards"],
-  [data-shortcut-modal="settings"] [class*="rtSEdW_card"],
-  [data-shortcut-modal="settings"] [class*="rtSEdW_cardFoot"] {
-    min-width: 0 !important; max-width: 100% !important; box-sizing: border-box !important;
-  }
-  [data-shortcut-modal="settings"] [class*="rtSEdW_cardFoot"] { flex-wrap: wrap !important; overflow: hidden; }
-  [data-shortcut-modal="settings"] [class*="rtSEdW_iconButton"] { overflow: hidden; }
-
-  /* Settings > Models: shrink provider names, never collide with actions. */
-  [data-shortcut-modal="settings"] [class*="zGbnIq_rowCard"] { min-width: 0 !important; max-width: 100% !important; box-sizing: border-box !important; }
-  [data-shortcut-modal="settings"] [class*="zGbnIq_rowHead"] { min-width: 0 !important; gap: 8px !important; }
-  [data-shortcut-modal="settings"] [class*="zGbnIq_rowIdentity"] { min-width: 0 !important; overflow: hidden; }
-  [data-shortcut-modal="settings"] [class*="zGbnIq_rowName"] { min-width: 0 !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  [data-shortcut-modal="settings"] [class*="zGbnIq_rowActions"] { flex-shrink: 0; gap: 6px; }
-  [data-shortcut-modal="settings"] [class*="zGbnIq_rowActions"] button { padding-left: 10px !important; padding-right: 10px !important; }
-  /* Settings > Models: the two-step "Add provider" tabs wrap instead of
-     running off the card. The primitive tab is nowrap and the panel has no
-     scroller of its own (overflow-x is hidden above), so a long ja label
-     overflowed the card with no way to reach it (#100). */
-  [data-shortcut-modal="settings"] [class*="zGbnIq_addModes"] { min-width: 0; max-width: 100%; }
-  [data-shortcut-modal="settings"] [class*="zGbnIq_addModes"] > [role="tablist"] {
-    max-width: 100% !important;
-    grid-auto-columns: minmax(0, 1fr) !important; box-sizing: border-box;
-  }
-  [data-shortcut-modal="settings"] [class*="zGbnIq_addModes"] > [role="tablist"] > [role="tab"] {
-    white-space: normal !important; height: auto !important; min-height: 28px; padding: 4px 10px !important;
-  }
-
   /* Model picker: value never runs into the chevron. The menu class hash
      changes between builds (#76), so the JS hook scopes the rule and only the
      stable cell suffix is matched. */
@@ -16703,12 +16734,6 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     padding-right: env(safe-area-inset-right, 0px) !important;
   }
 
-  [data-rdsh-float-stored] { visibility: hidden !important; pointer-events: none !important; }
-  .rdsh-float-shelf { position: fixed; z-index: 2147483000; left: 12px; top: 100px; }
-  .rdsh-float-shelf-button { width: 48px; height: 48px; border-radius: 50%; touch-action: none; font-size: 22px; }
-  .rdsh-float-shelf-list { position: fixed; z-index: 2147483001; min-width: 170px; max-width: calc(100vw - 16px); max-height: 50vh; overflow: auto; padding: 6px; border-radius: 10px; background: var(--dsw-alias-bg-l2, #232324); color: var(--dsw-alias-label-primary, #fff); box-shadow: 0 3px 16px #0008; }
-  .rdsh-float-shelf-list[hidden] { display: none; }
-  .rdsh-float-shelf-list button { display: block; width: 100%; min-height: 40px; border: 0; border-radius: 6px; padding: 8px; text-align: left; background: transparent; color: inherit; font: inherit; }
 
   /* Right panel: never wider than the phone, wide tables scroll inside it. */
   [data-rdsh-rightpanel] {
@@ -17029,12 +17054,20 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           clearPhoneHooks();
         }
 
-        const observer = new MutationObserver(() => {
+        if (phone()) {
+          motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+          applyMotion();
+        }
+        const onMotionPreference = () => { applyMotion(); emit({ motion: state.motion }); };
+        motionQuery?.addEventListener("change", onMotionPreference);
+
+        const observer = new MutationObserver((records) => {
+          const runFast = !Array.isArray(records) || records.length === 0 || records.some(needsFastPass);
           // A live chip can be mounted (and unmounted) between two decorate
           // passes; iconify it on the mutation that created it, so the raw
           // "サブエージェント 1件" label is never what the user sees.
-          if (phone()) decorateHeaderActivityChips();
-          scheduleDecorate();
+          if (phone() && runFast) decorateHeaderActivityChips();
+          scheduleDecorate({ fast: runFast });
         });
         // `data-sidebar-collapsed` / `data-rightbar-collapsed` are upstream's
         // own open/close signals on the app frame. They change without a
@@ -17277,6 +17310,9 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           applyDeviceTheme,
           readTerminalDark,
           writeTerminalDark,
+          readMotion,
+          writeMotion,
+          currentMotion,
           // #82: the device-local "running first" choice the activity panel uses.
           readActivitySort,
           writeActivitySort,
@@ -17301,7 +17337,6 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           // Diagnostics used by the unit tests: the layout predicate and the
           // restored scroll hooks have to be observable without a browser.
           decorateNow: decorate,
-          updateFloatShelf,
           specialKeys: {
             decorate: decorateTerminalKeys,
             sequence: terminalKeySequence,
@@ -17403,6 +17438,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             document.removeEventListener("pointermove", onPointerMove, true);
             document.removeEventListener("focusout", onModelFocusOut, true);
             media.removeEventListener("change", onMedia);
+            motionQuery?.removeEventListener("change", onMotionPreference);
+            motionQuery = null;
             // Invalidate any decorate frame queued before this teardown. The
             // frame checks `live` before touching the DOM, so it cannot undo
             // the cleanup below.
@@ -17420,6 +17457,8 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             rightPanelFitPending = false;
             style.remove();
             phoneStyle?.remove();
+            settingsStyle?.remove();
+            settingsStyle = null;
             rightPanelWatch?.disconnect();
             rightPanelIO?.disconnect();
             rightPanelWatch = null;

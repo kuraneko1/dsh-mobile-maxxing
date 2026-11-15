@@ -100,6 +100,11 @@ export const COPY = {
 		"activityPanel.sort.running.aria": "Sort running first",
 
 		// --- terminal key row ----------------------------------------------
+		"motion.title": "Reduced motion",
+		"motion.standard": "Standard",
+		"motion.reduced": "Reduced",
+		"motion.off": "Off",
+		"motion.note": "Applies only to this device’s mobile UI. Uses the OS preference until you make a choice.",
 		"terminalKeys.label": "Terminal keys",
 		"terminalKeys.esc": "Esc",
 		"terminalKeys.escape": "Escape",
@@ -116,10 +121,6 @@ export const COPY = {
 		"terminalKeys.control": "Control",
 		"terminalKeys.paste": "Paste",
 		"terminalKeys.menu": "Menu",
-		"terminalKeys.virtualWindow": "Virtual window",
-		"terminalKeys.scale": "Scale",
-		"mux.floatingWindows": "Floating windows",
-		"mux.showWindow": "Show in window",
 
 		// --- PWA section ----------------------------------------------------
 		"pwa.install.promptable": "Install DSH as an app",
@@ -455,6 +456,11 @@ export const COPY = {
 		"activityPanel.sort.running.aria": "実行中を上に並べ替え",
 
 		// --- terminal key row ----------------------------------------------
+		"motion.title": "省アニメーション",
+		"motion.standard": "標準",
+		"motion.reduced": "控えめ",
+		"motion.off": "オフ",
+		"motion.note": "この端末のモバイル画面だけに適用します。未設定時はOSの省アニメーション設定に従います。",
 		"terminalKeys.label": "ターミナルキー",
 		"terminalKeys.esc": "Esc",
 		"terminalKeys.escape": "エスケープ",
@@ -471,10 +477,6 @@ export const COPY = {
 		"terminalKeys.control": "コントロール",
 		"terminalKeys.paste": "貼り付け",
 		"terminalKeys.menu": "メニュー",
-		"terminalKeys.virtualWindow": "仮想ウィンドウ",
-		"terminalKeys.scale": "縮尺",
-		"mux.floatingWindows": "フロートウィンドウ",
-		"mux.showWindow": "ウィンドウで表示",
 
 		// --- PWA section ----------------------------------------------------
 		"pwa.install.promptable": "DSH をアプリとしてインストールできます",

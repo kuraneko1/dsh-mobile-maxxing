@@ -268,6 +268,7 @@ function typingHarness({ mobile = true } = {}) {
 	const sandbox = {
 		document, MutationObserver: class { observe() {} disconnect() {} },
 		phone: () => mobile,
+		currentMotion: () => "standard",
 		probeRegex: () => /^(new session|new chat|untitled)$/i,
 		__RDSH_MOBILE_UX_RUNNING__: new Set(),
 		Date: { now: () => clock },

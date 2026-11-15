@@ -2042,33 +2042,49 @@ test("#78 the mobile terminal gets one labelled, ordered key row above xterm", (
 	booted.disposeAll();
 });
 
-test("existing off-screen floats remain recoverable", () => {
+test("removed floating-window UI does not mutate existing terminal panes", () => {
 	const booted = bootGestures({ narrow: true });
 	const float = new FakeElement("div");
 	float.setAttribute("data-dockkit-float", "pane-1");
-	float._rect = () => { const left = Number.parseFloat(float.style.left ?? "-160"); return { left, right: left + 300, top: 30, bottom: 330, width: 300, height: 300 }; };
-	const title = new FakeElement("span"); title.textContent = "Terminal";
-	float._querySelector = (s) => s === "[data-dockkit-float-title]" ? title : null;
-	const owner = new FakeElement("div"); owner.setAttribute("data-sidebar-right-session", "session-1");
-	float._closest = (s) => s === "[data-sidebar-right-session]" ? owner : null;
+	float.style.left = "-160px";
 	const oldQuery = booted.doc.querySelectorAll;
-	booted.doc.querySelectorAll = (s) => s === "[data-dockkit-float]" ? [float] : oldQuery(s);
-	const create = booted.doc.createElement;
-	booted.doc.createElement = (tag) => { const node = create(tag); node._querySelector = (s) => s === ".rdsh-float-shelf-list" ? node.children.find((c) => c.className === "rdsh-float-shelf-list") : null; return node; };
-	const moves = [];
-	booted.ctx.get = (name) => name === "sidebarRight" ? { actionsFor: () => ({ moveFloat: (...args) => moves.push(args) }) } : undefined;
-	booted.sandbox.__RDSH_MOBILE_UX__.updateFloatShelf();
-	assert.equal(float.hasAttribute("data-rdsh-float-stored"), true);
-	const shelf = booted.doc.body.children.find((node) => node.className === "rdsh-float-shelf");
-	assert.ok(shelf);
-	const list = shelf.children[1];
-	assert.equal(list.children[0].textContent, "Terminal");
-	booted.sandbox.__RDSH_MOBILE_UX__.updateFloatShelf();
-	assert.equal(list.children.length, 1);
-	list.children[0].dispatchEvent(new FakeEvent("click"));
+	booted.doc.querySelectorAll = (selector) => selector === "[data-dockkit-float]" ? [float] : oldQuery(selector);
+	booted.drainFrames();
+	assert.equal(booted.sandbox.__RDSH_MOBILE_UX__.updateFloatShelf, undefined);
+	assert.equal(booted.doc.body.children.some(node => node.className === "rdsh-float-shelf"), false);
 	assert.equal(float.hasAttribute("data-rdsh-float-stored"), false);
-	assert.deepEqual(moves[0], ["session-1", "pane-1", 0, 30]);
+	assert.equal(float.style.left, "-160px", "removal must not write or delete terminal layout data");
 	booted.disposeAll();
+});
+
+test("#74 Android can open the drawer from inside the left half", () => {
+ const booted=bootGestures({narrow:true});
+ booted.sandbox.navigator=new Proxy(booted.sandbox.navigator,{get:(target,key)=>key==="userAgent"?"Android 16":Reflect.get(target,key)});
+ const {start,move}=edgeSwipeHandlers(booted);
+ const body=new FakeElement("div");body._closest=()=>null;
+ const open=new FakeElement("button");let opens=0;open.click=()=>{opens++};
+ const query=booted.doc.querySelector.bind(booted.doc);
+ booted.doc.querySelector=selector=>selector.includes("Open sidebar")?open:query(selector);
+ swipeStart(start,100,body);move(swipeTouch(180));
+ assert.equal(opens,1);booted.disposeAll();
+});
+
+test("#74 Android can open the panel from inside the right half", () => {
+ const booted=bootGestures({narrow:true});
+ booted.sandbox.navigator=new Proxy(booted.sandbox.navigator,{get:(target,key)=>key==="userAgent"?"Android 16":Reflect.get(target,key)});
+ const {start,move}=edgeSwipeHandlers(booted);const body=new FakeElement("div");body._closest=()=>null;
+ let toggles=0;const native=new FakeElement("button");native.click=()=>{toggles++};
+ const query=booted.doc.querySelector.bind(booted.doc);
+ booted.doc.querySelector=selector=>selector==="[data-sidebar-right-expand]"?native:query(selector);
+ swipeStart(start,290,body);move(swipeTouch(200));
+ assert.equal(toggles,1);booted.disposeAll();
+});
+
+test("#74 wider Android start zones never claim a vertical scroll",()=>{
+ const booted=bootGestures({narrow:true});booted.sandbox.navigator=new Proxy(booted.sandbox.navigator,{get:(target,key)=>key==="userAgent"?"Android 16":Reflect.get(target,key)});
+ const {start,move}=edgeSwipeHandlers(booted);const body=new FakeElement("div");body._closest=()=>null;
+ swipeStart(start,100,body);const event=swipeTouch(110,450);move(event);
+ assert.equal(event.prevented,0);assert.notEqual(booted.doc.documentElement.getAttribute("data-rdsh-drawer"),"open");booted.disposeAll();
 });
 
 test("dropping a dock tab outside cancels floating, while in-panel drops remain", () => {
@@ -2084,6 +2100,9 @@ test("dropping a dock tab outside cancels floating, while in-panel drops remain"
 	const down = booted.handler("pointerdown", "onPointerDown");
 	const up = booted.handler("pointerup", "onPointerUp");
 	down(pointerEvent(target, 100, 100));
+
+
+
 	up(pointerEvent(target, 100, 200));
 	assert.equal(cancel.length, 0, "in-panel reordering and splitting remain available");
 	down(pointerEvent(target, 100, 100));
@@ -2163,6 +2182,14 @@ test("#78 Ctrl is a one-shot modifier and Ctrl+C becomes ETX", () => {
 	// Pressing the armed modifier again cancels it instead of latching.
 	pressTerminalKey(row, "ctrl");
 	pressTerminalKey(row, "ctrl");
+test("#74 Android's interior zone leaves an unpanned code scroller alone",()=>{
+ const booted=bootGestures({narrow:true});booted.sandbox.navigator=new Proxy(booted.sandbox.navigator,{get:(target,key)=>key==="userAgent"?"Android 16":Reflect.get(target,key)});booted.drainFrames();
+ const scroller=new FakeElement("pre");scroller.nodeType=1;scroller.scrollLeft=0;scroller.scrollWidth=900;scroller.clientWidth=300;
+ const computed=booted.sandbox.getComputedStyle;booted.sandbox.getComputedStyle=node=>new Proxy(computed(node),{get:(target,key)=>node===scroller&&key==="overflowX"?"auto":Reflect.get(target,key)});
+ let prevented=0;const start=booted.handler("touchstart","onEdgeSwipeStart"),move=booted.handler("touchmove","onEdgeSwipeMove");
+ start({target:scroller,touches:[{clientX:290,clientY:300}],preventDefault(){prevented++}});move({target:scroller,touches:[{clientX:180,clientY:300}],preventDefault(){prevented++}});assert.equal(prevented,0);booted.disposeAll();
+});
+
 	assert.deepEqual(emulator.sent, [], "cancelling Ctrl sent input");
 	assert.equal(ctrl.getAttribute("aria-pressed"), "false");
 

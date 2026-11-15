@@ -30,7 +30,11 @@ function cssTemplate(name) {
 /** The body of the rule whose head is exactly `selector`. */
 function ruleBody(css, selector) {
 	const head = `${selector} {`;
-	const start = css.indexOf(head);
+	let start = -1, offset = 0;
+	for (const line of css.split("\n")) {
+		if (line.trimStart().startsWith(head)) { start = offset + line.indexOf(head); break; }
+		offset += line.length + 1;
+	}
 	assert.notEqual(start, -1, `${selector} has no rule`);
 	const end = css.indexOf("}", start);
 	assert.notEqual(end, -1, `${selector} rule is unterminated`);
@@ -47,7 +51,7 @@ function functionBody(name) {
 }
 
 test("every fixed layer pads the notch side itself", () => {
-	const phone = cssTemplate("CSS_PHONE");
+	const phone = cssTemplate("CSS_PHONE") + "\n" + cssTemplate("CSS_SETTINGS");
 	const layers = [
 		[".rdsh-mux-fab", ["left: calc(env(safe-area-inset-left, 0px) + 8px)"]],
 		[".rdsh-mux-route-back", [

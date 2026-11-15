@@ -55,6 +55,9 @@ function shippedStylesheet(source) {
 	if (device !== null && phone !== null) {
 		blocks.push(resolve(device[1]));
 		blocks.push(resolve(phone[1]));
+		// This fixture represents an open Settings screen, whose CSS is lazy.
+		const settings = source.match(/const CSS_SETTINGS = `([\s\S]*?)`;(?:\r?\n|$)/);
+		if (settings !== null) blocks.push(resolve(settings[1]));
 	}
 	assert.ok(blocks.length >= 2, "the shipped stylesheets are missing");
 	const css = blocks.join("\n");

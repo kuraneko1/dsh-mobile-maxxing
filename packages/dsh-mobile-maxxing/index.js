@@ -678,9 +678,13 @@ export function apply(ctx, config) {
 				handler: readOnly(async (req, res) => {
 					try {
 						const body = await readAsset(asset.file);
-						respond(res, req.method, 200, {
+						const etag = `"${createHash("sha256").update(body).digest("hex")}"`;
+						const unchanged = String(req.headers?.["if-none-match"] ?? "").split(",")
+							.some(value => ["*", etag, `W/${etag}`].includes(value.trim()));
+						respond(res, unchanged ? "HEAD" : req.method, unchanged ? 304 : 200, {
 							"content-type": asset.type,
 							"cache-control": ICON_CACHE_CONTROL,
+							etag,
 							"x-content-type-options": "nosniff",
 						}, body);
 					} catch {

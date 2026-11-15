@@ -59,6 +59,7 @@ none writes the shared DSH profile.
 | --- | --- |
 | Font sizes (text / code / terminal) | Changes this device's rendering only |
 | Terminal-only dark | Keeps the terminal dark on a light page; the shared theme and the rest of the UI are unchanged |
+| Motion | Under Other settings → Display, choose Standard, Reduced, or Off. With no saved choice, follows the OS preference. Saved only for this mobile browser; desktop is unchanged |
 | Display language | Changes this device's UI language; only locales registered in the shared locale service are offered. Japanese appears only with the optional separate `dsh-locale-ja` package |
 | Default permission | Applies to new sessions started on this device only |
 
