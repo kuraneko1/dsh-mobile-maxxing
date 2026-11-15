@@ -724,6 +724,19 @@ test("HEAD returns headers without a body", async () => {
 	assert.ok(Number(response.headers["content-length"]) > 10);
 });
 
+test("#144 static icons and screenshots use byte-accurate conditional responses", async () => {
+ const {routes}=mount({});
+ for(const path of ["/pwa/icon-192.png","/pwa/screenshot-mobile.png"]){
+  const route=routes.get(path),first=await call(route);
+  assert.equal(first.status,200);assert.match(first.headers.etag,/^"[a-f0-9]{64}"$/);
+  for(const condition of [first.headers.etag,"W/"+first.headers.etag,'"other", '+first.headers.etag,"*"]){
+   const next=await call(route,"GET",undefined,{"if-none-match":condition});
+   assert.equal(next.status,304);assert.equal(next.body.length,0);assert.equal(next.headers.etag,first.headers.etag);
+  }
+  assert.equal((await call(route,"GET",undefined,{"if-none-match":'"different"'})).status,200);
+ }
+});
+
 test("a missing optional asset is a 404, not a crash", async () => {
 	const { routes } = mount({});
 	const route = routes.get("/pwa/screenshot-mobile.png");

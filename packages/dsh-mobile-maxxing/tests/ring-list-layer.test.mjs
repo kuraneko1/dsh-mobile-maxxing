@@ -25,7 +25,7 @@ function functionSource(name) {
 	return source.slice(at, end + "\n    }".length);
 }
 
-const markSource = functionSource("classToken") + "\n" + functionSource("markRingList");
+const markSource = ["classToken", "writeOwnedAttribute", "removeOwnedAttribute", "markRingList"].map(functionSource).join("\n");
 
 /** Just enough of an element for markRingList: attributes, class, parent. */
 function element(className = "", attributes = {}) {

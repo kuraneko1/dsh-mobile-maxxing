@@ -26,6 +26,8 @@ function functionSource(name) {
 }
 
 const NAMES = [
+	"writeOwnedAttribute",
+	"removeOwnedAttribute",
 	"classToken",
 	"composerCard",
 	"modelTrigger",

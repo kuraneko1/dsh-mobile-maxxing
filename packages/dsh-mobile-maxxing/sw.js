@@ -159,15 +159,28 @@ async function handleNavigation(request) {
 	}
 }
 
+/** CacheStorage ignores HTTP freshness; honor it before skipping revalidation. */
+function freshStaticResponse(response, now = Date.now()) {
+ const control = response.headers.get("cache-control") || "";
+ if (/(?:^|,)\s*(?:no-cache|no-store)(?:\s*(?:[=,]|$))/i.test(control)) return false;
+ const lifetime = /(?:^|,)\s*max-age\s*=\s*"?(\d+)"?(?:\s*(?:,|$))/i.exec(control);
+ const date = Date.parse(response.headers.get("date") || "");
+ const age = Number(response.headers.get("age") || 0);
+ if (!lifetime || !Number.isFinite(date) || date > now || !Number.isFinite(age) || age < 0) return false;
+ return now - date + age * 1000 < Number(lifetime[1]) * 1000;
+}
+
 async function handleStatic(request) {
 	const cache = await caches.open(CACHE_NAME);
 	const cached = await cache.match(request);
 	if (cached !== undefined) {
-		// Revalidate in the background; the cached copy answers this request.
+		// Fresh immutable chunks and one-day icons need no network, cache
+		// write or full key scan. Expired responses still revalidate (#144).
+		if (freshStaticResponse(cached)) return cached;
+		// Mutable assets still revalidate; replacement cannot grow this cache.
 		fetch(request)
 			.then(async (response) => {
 				if (response.ok) await put(cache, request, response);
-				await trim(cache);
 			})
 			.catch(() => {});
 		return cached;
