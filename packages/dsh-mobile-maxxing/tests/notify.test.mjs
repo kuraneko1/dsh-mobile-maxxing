@@ -21,6 +21,7 @@ import {
 	endpointAudience,
 	fillTemplate,
 	fromBase64Url,
+	isRootSession,
 	makePayload,
 	normalizeNotifyConfig,
 	PushStore,
@@ -34,6 +35,17 @@ test("base64url round-trips and drops padding", () => {
 	const encoded = toBase64Url(bytes);
 	assert.match(encoded, /^[A-Za-z0-9_-]+$/, "no +, / or = survive");
 	assert.deepEqual(fromBase64Url(encoded), bytes);
+});
+
+test("only a session without a subagent origin is a notification root", () => {
+	// DSH removed ctx.agents.roots() in 0.2.2-rc.2; the session header is the
+	// supported classification. This listener is outermost on the plan-review
+	// question, so throwing here makes plan mode's exit fail.
+	assert.equal(isRootSession({ header: { cwd: "/tmp/work" } }), true);
+	assert.equal(isRootSession({ header: { origin: "subagent" } }), false);
+	assert.equal(isRootSession({ header: {} }), true, "an older session stays top-level");
+	assert.equal(isRootSession({}), true, "a headerless test double stays top-level");
+	assert.equal(isRootSession(undefined), true);
 });
 
 test("templates keep unknown placeholders visible", () => {
@@ -234,7 +246,7 @@ test("a phone send marks its own turn; a desktop send does not", async () => {
 	try {
 		const listeners = new Map();
 		const agent = { id: "s1" };
-		const agents = { get: (id) => (id === "s1" ? agent : undefined), roots: () => [agent] };
+		const agents = { get: (id) => (id === "s1" ? agent : undefined) };
 		const routes = new Map();
 		const services = {
 			agents,
@@ -315,7 +327,7 @@ test("notification fan-out targets the app that started the turn or request, nev
 		const listeners = new Map();
 		const routes = new Map();
 		const agent = { id: "s1" };
-		const agents = { get: (id) => (id === "s1" ? agent : undefined), roots: () => [agent] };
+		const agents = { get: (id) => (id === "s1" ? agent : undefined) };
 		const services = {
 			agents,
 			connection: { requestRejection: () => undefined },
@@ -494,7 +506,7 @@ test("a broken push store does not stop the PWA routes", async () => {
 	};
 	const services = {
 		webServer,
-		agents: { get: () => undefined, roots: () => [] },
+		agents: { get: () => undefined },
 		connection: { requestRejection: () => undefined },
 	};
 	const scope = {

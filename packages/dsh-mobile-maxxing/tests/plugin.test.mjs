@@ -43,7 +43,6 @@ function mount(config, overrides = {}) {
 	/** Agents: no sessions, which is what a quiet deployment looks like. */
 	const agents = {
 		get: () => undefined,
-		roots: () => [],
 	};
 	const services = {
 		webServer,
