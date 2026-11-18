@@ -623,6 +623,27 @@ test("#135 small icon-only chrome buttons are tagged, the rest are not", () => {
 	assert.equal(big.tagged(), false, "a button that is already 44px needs nothing");
 });
 
+test("#135 a measured button outside the band is not measured again on every pass", () => {
+	const harness = tapTargetHarness();
+	const big = harness.make({ width: 48, height: 44 });
+	const unrendered = harness.make({ width: 0, height: 0 });
+	const reads = new Map([[big, 0], [unrendered, 0]]);
+	for (const button of [big, unrendered]) {
+		const read = button.getBoundingClientRect;
+		button.getBoundingClientRect = () => {
+			reads.set(button, reads.get(button) + 1);
+			return read();
+		};
+	}
+	harness.decorate();
+	harness.decorate();
+	harness.decorate();
+	// Each read forces a layout; a streamed reply ran this pass for every chunk.
+	assert.equal(reads.get(big), 1, "a rejected 48px button was measured again");
+	assert.equal(reads.get(unrendered), 3, "a button that has not rendered yet must be measured again");
+	assert.equal(big.tagged(), false);
+});
+
 test("#135 a desktop pass never tags and clears a stale tag", () => {
 	const harness = tapTargetHarness({ phone: false });
 	const button = harness.make({ width: 28, height: 28 });

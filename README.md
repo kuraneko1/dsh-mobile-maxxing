@@ -3,29 +3,29 @@
 DeepSeek Harness（DSH）の Web UI を、スマートフォンとタブレットで快適に使うためのプラグイン群です。
 PWA、モバイルレイアウト、通知、Markdown 表、日本語 UI を、必要なものだけ導入できます。
 
-**[最新リリース v1.0.8](https://github.com/kuraneko1/dsh-mobile-maxxing/releases/tag/v1.0.8)** · **[リリースノート](RELEASE-NOTES-v1.0.8.md)** · **[English](README.en.md)** · **[简体中文](README.zh-CN.md)**
+**[最新リリース v1.0.9](https://github.com/kuraneko1/dsh-mobile-maxxing/releases/tag/v1.0.9)** · **[リリースノート](RELEASE-NOTES-v1.0.9.md)** · **[English](README.en.md)** · **[简体中文](README.zh-CN.md)**
 
 - モバイル本体は素の DSH にそのまま導入でき、通知用の外部ライブラリも不要です。
 - 画面幅ではなく端末を判定するため、狭い PC ウィンドウやタッチ対応 Windows PC をモバイル扱いしません。
 - PC ではモバイル用の UI・表スタイルを構築せず、標準の DSH を保ちます。
 - 端末側の見た目や入力設定はブラウザごとに保存し、ホストの共有設定を書き換えません。
 
-> v1.0.7 は撤回済みのため再利用せず、v1.0.8 として公開します。実機未確認事項と既知の制限は[リリースノート](RELEASE-NOTES-v1.0.8.md)に明記しています。
+> v1.0.7 は撤回済みのため再利用しません。実機未確認事項と既知の制限は[リリースノート](RELEASE-NOTES-v1.0.9.md)に明記しています。
 
 ## コンポーネント
 
 | コンポーネント | 役割 | 現在の版 | ソース |
 | --- | --- | --- | --- |
-| `dsh-mobile-maxxing` | PWA、通知、モバイル UX | 1.0.8 | このリポジトリ |
-| `dsh-md-rendering` | モバイルの Markdown 表表示 | 0.1.3 | [kuraneko1/dsh-md-rendering](https://github.com/kuraneko1/dsh-md-rendering) / [`packages/dsh-md-rendering`](packages/dsh-md-rendering) |
-| `dsh-locale-ja` | 65名前空間・2915キーの日本語 UI | 0.1.3 | [kuraneko1/dsh-locale-ja](https://github.com/kuraneko1/dsh-locale-ja) / [`packages/dsh-locale-ja`](packages/dsh-locale-ja) |
+| `dsh-mobile-maxxing` | PWA、通知、モバイル UX | 1.0.9 | このリポジトリ |
+| `dsh-md-rendering` | モバイルの Markdown 表表示 | 0.1.4 | [kuraneko1/dsh-md-rendering](https://github.com/kuraneko1/dsh-md-rendering) / [`packages/dsh-md-rendering`](packages/dsh-md-rendering) |
+| `dsh-locale-ja` | 65名前空間・2915キーの日本語 UI | 0.1.4 | [kuraneko1/dsh-locale-ja](https://github.com/kuraneko1/dsh-locale-ja) / [`packages/dsh-locale-ja`](packages/dsh-locale-ja) |
 
 3つは独立しています。プラグイン画面で個別に有効・無効を切り替えられます。
 CJK の自動リンク修正は、PC の描画を変えない方針のため、別パッケージ `rdsh-markdown-cjk` に分離しています。
 
 ## 動作条件
 
-- 検証対象の DSH: **0.2.1-rc.2 / 0.2.1-rc.3 / 0.2.2-alpha.2 / 0.2.2-rc.1 / 0.2.2-rc.3**
+- 検証対象の DSH: **0.2.1-rc.2 / 0.2.1-rc.3 / 0.2.2-alpha.2 / 0.2.2-rc.1 / 0.2.2-rc.3 / 0.2.2-rc.4**
 - ブラウザ: 現行の Chrome / Edge / Safari。iOS・iPadOS を含みます
 - PWA と Web Push: **HTTPS または localhost** で DSH へアクセスしていること
 - OS 通知: ブラウザと OS の両方で通知が許可されていること
@@ -42,7 +42,7 @@ CJK の自動リンク修正は、PC の描画を変えない方針のため、�
 curl -fsSL https://raw.githubusercontent.com/kuraneko1/dsh-mobile-maxxing/main/scripts/install-mobile-bundle.mjs | node --input-type=module
 ```
 
-既定では `web` プロファイルへ、本体はリリース `v1.0.8` に固定、日本語化も同リリースの `0.1.3` 成果物、表表示は `v1.0.8` の `0.1.3` 成果物を導入します。
+既定では `web` プロファイルへ、本体はリリース `v1.0.9` に固定、日本語化も同リリースの `0.1.4` 成果物、表表示は `v1.0.9` の `0.1.4` 成果物を導入します。
 導入後は DSH を再起動し、ブラウザを再読み込みしてください。
 
 別のプロファイルを使う場合:
@@ -66,7 +66,7 @@ dsh plugin --profile web add github:kuraneko1/dsh-locale-ja
 ### Markdown 表だけを追加
 
 ```sh
-dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v1.0.8/dsh-md-rendering-0.1.3.tgz
+dsh plugin --profile web add https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v1.0.9/dsh-md-rendering-0.1.4.tgz
 ```
 
 `dsh plugin --profile web add` は依存と bundle の両方を更新します。`cd ~/.dsh/profiles/web` は不要です。
@@ -151,8 +151,8 @@ v1.0.0 では、通知の信頼性と安全性も強化しています。
 
 - 65名前空間・2915キーを翻訳し、英語フォールバックは0です
 - モバイル本体には含めず、独立した `dsh-locale-ja` だけが日本語を所有します
-- DSH 0.2.1-rc.2 / rc.3 / 0.2.2-alpha.2 の peer 依存に対応しています
-- DSH 0.2.2-alpha.2 は本体に日本語を同梱しています。`dsh-locale-ja` は `ja` が登録済みなら何も登録せず、DSH 標準の日本語訳がそのまま使われます
+- DSH 0.2.1-rc.2 / rc.3 / 0.2.2-alpha.2 / 0.2.2-rc.1 / 0.2.2-rc.3 / 0.2.2-rc.4 の peer 依存に対応しています
+- DSH 0.2.2 以降は本体に日本語を同梱しています。`dsh-locale-ja` は `ja` が登録済みなら何も登録せず、DSH 標準の日本語訳がそのまま使われます
 - 不完全なカタログは `pack-all` が `REFUSED` と表示し、配布しません
 
 詳しくは [`packages/dsh-locale-ja/README.md`](packages/dsh-locale-ja/README.md) を参照してください。
@@ -162,23 +162,23 @@ v1.0.0 では、通知の信頼性と安全性も強化しています。
 | 環境変数 | 用途 | 既定 |
 | --- | --- | --- |
 | `DSH_PROFILE` | 導入先プロファイル | `web` |
-| `DSH_BUNDLE_TAG` | 本体を固定する Git ref と、表 tarball を含むリリースタグ | `v1.0.8`（本体もこのタグに固定） |
+| `DSH_BUNDLE_TAG` | 本体を固定する Git ref と、表 tarball を含むリリースタグ | `v1.0.9`（本体もこのタグに固定） |
 | `DSH_BUNDLE_BASE_URL` | 表 tarball のダウンロード元 | 指定タグの GitHub Releases |
-| `DSH_LOCALE_VERSION` | 同じリリースから導入する日本語化の版 | `0.1.3` |
+| `DSH_LOCALE_VERSION` | 同じリリースから導入する日本語化の版 | `0.1.4` |
 | `DSH_LOCALE_REF` | 指定した場合だけ日本語化をGit refから導入 | 未指定（リリース成果物を使用） |
-| `DSH_MD_VERSION` | 表パッケージの版 | `0.1.3` |
+| `DSH_MD_VERSION` | 表パッケージの版 | `0.1.4` |
 
 例:
 
 ```sh
 DSH_PROFILE=web-mobile \
-DSH_BUNDLE_TAG=v1.0.8 \
+DSH_BUNDLE_TAG=v1.0.9 \
 DSH_LOCALE_REF=main \
-DSH_MD_VERSION=0.1.3 \
+DSH_MD_VERSION=0.1.4 \
   node scripts/install-mobile-bundle.mjs
 ```
 
-本体は既定で `DSH_BUNDLE_TAG` のタグ（`v1.0.8`）に固定されます。`DSH_BUNDLE_TAG` を指定すると、本体と表 tarball の両方がその ref に切り替わります。指定したリリースに、対応する表 tarball が必要です。
+本体は既定で `DSH_BUNDLE_TAG` のタグ（`v1.0.9`）に固定されます。`DSH_BUNDLE_TAG` を指定すると、本体と表 tarball の両方がその ref に切り替わります。指定したリリースに、対応する表 tarball が必要です。
 
 ## トラブルシューティング
 
@@ -262,11 +262,16 @@ README の版付きURLは `pack-all` が更新します。版なしURLを再利�
 ## 貢献者
 
 - [@kuraneko1](https://github.com/kuraneko1)（`_ryu15_` 名義のコミットを含む）— 実装、レビュー対応、日本語化、検証、配布整備
-- [@FlowingSPDG](https://github.com/FlowingSPDG)
-- [@AliceSaikawa](https://github.com/AliceSaikawa) — iOS の PWA、キーボード表示、モバイル UI の改善
-- コードレビューと検証に協力いただいた皆さん
+- [@AliceSaikawa](https://github.com/AliceSaikawa) — iOS の PWA、キーボード表示、サイドメニュー、0.2.2 対応、モバイル UI 改善
+- [@FlowingSPDG](https://github.com/FlowingSPDG) — `exit_plan_mode` 時の通知ルート判定修正
+- [@sahenjp](https://github.com/sahenjp) — バンドルインストーラーの既定タグ・本体固定修正
+- [@RNA4219](https://github.com/RNA4219) — モバイルの戻る操作と終了確認の統一
+- [@yebisu0529-ship-it](https://github.com/yebisu0529-ship-it) — 成果物ファイルの長押しダウンロードメニュー
+- [@LYB926](https://github.com/LYB926) — 簡体字中国語 README
+- [@PyGuy2](https://github.com/PyGuy2) — 開発貢献
+- Issue 報告・検証・改善提案: [@neutron42-jp](https://github.com/neutron42-jp), [@tjm8874](https://github.com/tjm8874), [@henaxxx](https://github.com/henaxxx), [@onemunanoyo](https://github.com/onemunanoyo), コードレビューと検証に協力いただいた皆さん
 
-貢献内容の詳細は [v1.0.0 リリースノート](RELEASE-NOTES-v1.0.0.md) にも記載しています。
+貢献内容の詳細は [v1.0.9 リリースノート](RELEASE-NOTES-v1.0.9.md) および [v1.0.0 リリースノート](RELEASE-NOTES-v1.0.0.md) にも記載しています。
 
 ## License
 

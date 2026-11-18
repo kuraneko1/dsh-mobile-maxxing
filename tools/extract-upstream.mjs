@@ -39,9 +39,9 @@ class Scope {
 		this.bindings = new Map();
 	}
 
-	/** @param {string} name @param {import('acorn').Node | null} init @param {import('acorn').Node} origin @param {string} kind */
-	define(name, init, origin, kind = 'const') {
-		this.bindings.set(name, { name, init, origin, kind, scope: this });
+	/** @param {string} name @param {import('acorn').Node | null} init @param {import('acorn').Node} origin @param {string} kind @param {Scope} [valueScope] */
+	define(name, init, origin, kind = 'const', valueScope = this) {
+		this.bindings.set(name, { name, init, origin, kind, scope: valueScope });
 	}
 
 	/** @param {string} name @returns {Binding | null} */
@@ -95,7 +95,12 @@ async function loadAcorn() {
 		// new enough for the syntax in the installed rc. An already-installed
 		// project acorn is the next choice; the Debian system acorn can be older
 		// than the rc's syntax, so it is only the last resort.
-		const natives = process.binding?.('natives');
+		let natives;
+		try {
+			natives = process.binding?.('natives');
+		} catch {
+			natives = undefined;
+		}
 		const source = natives?.['internal/deps/acorn/acorn/dist/acorn'];
 		if (typeof source === 'string') {
 			const module = { exports: {} };
@@ -310,7 +315,7 @@ function evalPrimitive(node, scope, seen = new Set()) {
 			if (callee.type !== 'MemberExpression' || callee.computed) return { ok: false, reason: 'unsupported call value' };
 			const method = memberName(callee.property);
 			if (method === 'join' && callee.object.type === 'ArrayExpression') {
-				const separator = node.arguments.length === 0 ? ',' : evalString(node.arguments[0], scope, seen);
+				const separator = node.arguments.length === 0 ? { ok: true, value: ',' } : evalString(node.arguments[0], scope, seen);
 				if (!separator.ok) return separator;
 				const parts = [];
 				for (const element of callee.object.elements) {
@@ -465,7 +470,7 @@ function evalArrayElements(node, scope, seen = new Set()) {
 		return evalArrayElements(node.arguments[0], scope, seen);
 	}
 	if (node.type !== 'ArrayExpression') return { ok: false, reason: 'unsupported array expression ' + node.type };
-	const elements = [];
+			const elements = [];
 	for (const element of node.elements) {
 		if (element === null) return { ok: false, reason: 'array hole' };
 		if (element.type === 'SpreadElement') {
@@ -473,7 +478,7 @@ function evalArrayElements(node, scope, seen = new Set()) {
 			if (!spread.ok) return spread;
 			elements.push(...spread.value);
 		} else {
-			elements.push(element);
+			elements.push({ node: element, scope });
 		}
 	}
 	return { ok: true, value: elements };
@@ -599,12 +604,14 @@ function bindLoopPattern(pattern, element, scope) {
 		for (const declarator of pattern.declarations) bindLoopPattern(declarator.id, element, scope);
 		return;
 	}
+	const elementNode = element && typeof element === 'object' && 'node' in element ? element.node : element;
+	const elementScope = element && typeof element === 'object' && 'scope' in element ? element.scope : scope;
 	if (pattern.type === 'Identifier') {
-		scope.define(pattern.name, element, pattern, 'loop');
+		scope.define(pattern.name, elementNode, pattern, 'loop', elementScope);
 		return;
 	}
 	if (pattern.type === 'ArrayPattern') {
-		const tuple = evalArrayElements(element, scope);
+		const tuple = evalArrayElements(elementNode, elementScope);
 		if (!tuple.ok) {
 			bindPatternNames(pattern, scope, 'loop');
 			return;
@@ -829,6 +836,10 @@ export async function buildSnapshot(options = {}) {
 export function writeSnapshot(snapshot, outDir = DEFAULT_SNAPSHOT_DIR) {
 	const englishDir = path.join(outDir, 'namespaces', 'en');
 	fs.mkdirSync(englishDir, { recursive: true });
+	const expectedFiles = new Set(snapshot.namespaceEntries.map((entry) => entry.fileName));
+	for (const file of fs.readdirSync(englishDir)) {
+		if (file.endsWith('.json') && !expectedFiles.has(file)) fs.rmSync(path.join(englishDir, file), { force: true });
+	}
 	for (const entry of snapshot.namespaceEntries) {
 		fs.writeFileSync(path.join(englishDir, entry.fileName), jsonText(entry.dictionaries.en));
 	}

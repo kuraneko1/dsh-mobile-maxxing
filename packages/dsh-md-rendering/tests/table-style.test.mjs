@@ -92,7 +92,7 @@ test('installer pins specified mobile and locale refs independently', (t) => {
   const script = fileURLToPath(new URL('../../../scripts/install-mobile-bundle.mjs', import.meta.url));
   const run = spawnSync(process.execPath, [script], { env, encoding: 'utf8' });
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(JSON.parse(run.stdout), ['plugin', '--profile', 'isolated', 'add', 'github:kuraneko1/dsh-mobile-maxxing#v0.8.0', 'https://example.test/v0.8.0/dsh-md-rendering-0.1.3.tgz', 'github:kuraneko1/dsh-locale-ja#locale-ref']);
+  assert.deepEqual(JSON.parse(run.stdout), ['plugin', '--profile', 'isolated', 'add', 'github:kuraneko1/dsh-mobile-maxxing#v0.8.0', 'https://example.test/v0.8.0/dsh-md-rendering-0.1.4.tgz', 'github:kuraneko1/dsh-locale-ja#locale-ref']);
   env.DSH_MD_VERSION = '0.1.2';
   const overridden = spawnSync(process.execPath, [script], { env, encoding: 'utf8' });
   assert.equal(overridden.status, 0, overridden.stderr);
@@ -105,13 +105,33 @@ test('installer pins specified mobile and locale refs independently', (t) => {
   delete env.DSH_BUNDLE_TAG; delete env.DSH_LOCALE_REF; delete env.DSH_BUNDLE_BASE_URL; delete env.DSH_MD_VERSION; delete env.DSH_LOCALE_VERSION;
   const defaults = spawnSync(process.execPath, [script], { env, encoding: 'utf8' });
   assert.equal(defaults.status, 0, defaults.stderr);
-  assert.deepEqual(JSON.parse(defaults.stdout).slice(4), ['github:kuraneko1/dsh-mobile-maxxing#v1.0.8', 'https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v1.0.8/dsh-md-rendering-0.1.3.tgz', 'https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v1.0.8/dsh-locale-ja-0.1.3.tgz']);
+  assert.deepEqual(JSON.parse(defaults.stdout).slice(4), ['github:kuraneko1/dsh-mobile-maxxing#v1.0.9', 'https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v1.0.9/dsh-md-rendering-0.1.4.tgz', 'https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/v1.0.9/dsh-locale-ja-0.1.4.tgz']);
 });
 
 test('bundle exports its client and distribution resources', () => {
   assert.equal(manifest.dsh.bundle.patch, './cordis.patch.yml');
   assert.equal(manifest.exports['./client'], './client.js');
+  assert.equal(manifest.exports['./package.json'], './package.json');
+  assert.deepEqual(manifest.dsh.client.inject, []);
   for (const file of ['client.js', 'index.js', 'cordis.patch.yml', 'icon.svg']) {
     assert.ok(manifest.files.includes(file), `${file} must be packaged`);
   }
+});
+
+test('P-1 & T-1: table cells inherit compact font size, wide wrapper clears bottom padding, and installer normalizes trailing slash', (t) => {
+  const { registrations } = boot('mobile');
+  const css = registrations[0].component().children[0];
+  assert.match(css, /div > table th,\s*\n\s*html\[data-rdsh-device-mode="mobile"\] \[data-chat-flow-kind="assistant-step"\] div > table td[\s\S]*?font-size: \.85rem;[\s\S]*?line-height: normal;/);
+  assert.match(css, /div\.md-table-wide \{[^}]*padding-bottom: 0 !important;/);
+
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'dsh-installer-slash-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const dsh = path.join(directory, 'dsh');
+  writeFileSync(dsh, '#!/usr/bin/env node\nconsole.log(JSON.stringify(process.argv.slice(2)))\n');
+  chmodSync(dsh, 0o755);
+  const env = { ...process.env, PATH: directory + path.delimiter + process.env.PATH, DSH_BUNDLE_BASE_URL: 'https://example.test/v1.0.9/' };
+  const script = fileURLToPath(new URL('../../../scripts/install-mobile-bundle.mjs', import.meta.url));
+  const run = spawnSync(process.execPath, [script], { env, encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(JSON.parse(run.stdout)[5], 'https://example.test/v1.0.9/dsh-md-rendering-0.1.4.tgz');
 });

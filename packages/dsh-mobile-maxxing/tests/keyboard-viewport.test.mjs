@@ -80,7 +80,8 @@ test("only a landscape phone compacts the conversation header without overlappin
 
 test("only deliberate focus is kept, including slash command editing", () => {
 	assert.match(CLIENT, /if \(field === allowFocusElement\) return;/);
-	assert.match(CLIENT, /if \(event.key === "Tab"\) \{\s*allowFocusElement = textBoxOf\(event.target\);/);
+	assert.match(CLIENT, /if \(tabFocusPending\) \{\s*allowFocusElement = field;\s*tabFocusPending = false;\s*return;\s*\}/);
+	assert.match(CLIENT, /event\.key === "Tab"\) \{\s*tabFocusPending = true;/);
 	assert.doesNotMatch(CLIENT, /allowFocusUntil/);
 });
 

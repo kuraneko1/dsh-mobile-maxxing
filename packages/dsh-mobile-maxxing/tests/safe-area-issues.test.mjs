@@ -206,6 +206,10 @@ test("the measured values are released with the rest of the surface", () => {
 	}
 	const measure = functionBody("measureSafeArea");
 	for (const edge of ["left", "right"]) {
-		assert.ok(measure.includes(`root.style.setProperty("--rdsh-safe-${edge}"`), `measureSafeArea does not publish --rdsh-safe-${edge}`);
+		assert.ok(measure.includes(`setRootProperty(root, "--rdsh-safe-${edge}"`), `measureSafeArea does not publish --rdsh-safe-${edge}`);
 	}
+	// Unchanged values are not rewritten: an inherited custom property on <html>
+	// restyles the whole document.
+	const setter = functionBody("setRootProperty");
+	assert.match(setter, /getPropertyValue\(name\) !== value\) root\.style\.setProperty\(name, value\)/);
 });

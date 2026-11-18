@@ -36,7 +36,7 @@ import { COPY, PROBES, copyFor, serviceWorkerCopy } from "./lib/copy.js";
 import { copyTable } from "./lib/copy-source.js";
 import { MANIFEST_FILE, MODE_GLOBAL, earlyModeScript } from "./lib/device-mode.js";
 import { readFile } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import { spawn } from "node:child_process";
@@ -341,12 +341,18 @@ export function resolveDshCli({
 	execPath = process.execPath,
 	platform = process.platform,
 } = {}) {
-	const entry = Array.isArray(argv) ? argv[1] : undefined;
-	if (typeof entry === "string" && /(^|[\\/])bin\.js$/.test(entry)) {
-		const script = isAbsolute(entry) ? entry : resolvePath(entry);
-		// A path that no longer exists (the install moved, the cwd changed) is
-		// no better than guessing: let the PATH fallback speak for itself.
-		if (existsSync(script)) return { command: execPath, args: [script], shell: false, via: "process" };
+	const rawEntry = Array.isArray(argv) ? argv[1] : undefined;
+	if (typeof rawEntry === "string" && rawEntry !== "") {
+		let entry = rawEntry;
+		try {
+			entry = realpathSync(rawEntry);
+		} catch { /* fall back to literal argv[1] when missing or mocked */ }
+		if (/(^|[\\/])bin\.js$/.test(entry)) {
+			const script = isAbsolute(entry) ? entry : resolvePath(entry);
+			// A path that no longer exists (the install moved, the cwd changed) is
+			// no better than guessing: let the PATH fallback speak for itself.
+			if (existsSync(script)) return { command: execPath, args: [script], shell: false, via: "process" };
+		}
 	}
 	return platform === "win32"
 		? { command: "dsh.cmd", args: [], shell: true, via: "path" }
@@ -381,10 +387,12 @@ export function classifyUpdateFailure(error, stderr = "") {
 	const text = `${stderr}\n${error && typeof error === "object" && typeof error.message === "string" ? error.message : ""}`;
 	const code = error && typeof error === "object" ? error.code : undefined;
 	if (code === "ENOENT") return UPDATE_FAILURES["cli-missing"];
-	if (code === "ETIMEDOUT" || (error && typeof error === "object" && (error.killed === true || error.signal === "SIGTERM"))) return UPDATE_FAILURES.timeout;
+	if (code === "ETIMEDOUT" || (error && typeof error === "object" && (error.killed === true || error.signal === "SIGTERM" || error.signal === "SIGKILL")) || /\bETIMEDOUT\b/i.test(text)) {
+		return UPDATE_FAILURES.timeout;
+	}
 	if (/\bENOSPC\b|no space left/i.test(text)) return UPDATE_FAILURES.disk;
 	if (/\bEACCES\b|\bEPERM\b|permission denied/i.test(text)) return UPDATE_FAILURES.permission;
-	if (/\bENOTFOUND\b|\bEAI_AGAIN\b|\bECONNREFUSED\b|\bECONNRESET\b|\bETIMEDOUT\b|getaddrinfo|socket hang up|certificate|TLS/i.test(text)) return UPDATE_FAILURES.network;
+	if (/\bENOTFOUND\b|\bEAI_AGAIN\b|\bECONNREFUSED\b|\bECONNRESET\b|getaddrinfo|socket hang up|certificate|TLS/i.test(text)) return UPDATE_FAILURES.network;
 	if (/\b404\b|Not Found|not found in the registry/i.test(text)) return UPDATE_FAILURES["release-missing"];
 	return UPDATE_FAILURES.unknown;
 }
@@ -427,9 +435,10 @@ function runPluginUpdateOnce(profile, tag) {
 			const failure = classifyUpdateFailure(error, stderr);
 			reject(Object.assign(new Error(failure.reason), { failure, detail: cleanInstallerOutput(stderr) || String(error?.message || error), spawnError: error }));
 		});
-		child.on("close", (code) => {
+		child.on("close", (code, signal) => {
 			if (code === 0) { resolve(); return; }
-			const failure = classifyUpdateFailure(null, stderr);
+			const timedOut = child.killed === true || signal === "SIGTERM" || signal === "SIGKILL";
+			const failure = classifyUpdateFailure(timedOut ? { code: "ETIMEDOUT", signal, killed: child.killed } : null, stderr);
 			reject(Object.assign(new Error(failure.reason || `exit ${code}`), { failure, detail: cleanInstallerOutput(stderr) || `exit ${code}`, exitCode: code }));
 		});
 	});
@@ -465,8 +474,12 @@ async function runPluginUpdate(profile, tag) {
 /** The DSH version this process runs, for the Updates panel (#145). */
 export function dshVersion(argv = process.argv) {
 	// The running CLI is the one truth: <dsh>/lib/bin.js next to <dsh>/package.json.
-	const entry = Array.isArray(argv) ? argv[1] : undefined;
-	if (typeof entry === "string" && entry !== "") {
+	const rawEntry = Array.isArray(argv) ? argv[1] : undefined;
+	if (typeof rawEntry === "string" && rawEntry !== "") {
+		let entry = rawEntry;
+		try {
+			entry = realpathSync(rawEntry);
+		} catch { /* fall back to literal argv[1] */ }
 		for (const candidate of [resolvePath(entry, "../package.json"), resolvePath(entry, "../../package.json")]) {
 			try {
 				const pkg = JSON.parse(readFileSync(candidate, "utf8"));
@@ -480,6 +493,16 @@ export function dshVersion(argv = process.argv) {
 		if (pkg && typeof pkg.version === "string") return pkg.version;
 	} catch { /* nothing to report */ }
 	return "";
+}
+
+async function readOwnManifest() {
+	for (const url of [new URL("../../package.json", import.meta.url), new URL("./package.json", import.meta.url)]) {
+		try {
+			const pkg = JSON.parse(await readFile(url, "utf8"));
+			if (pkg && pkg.name === name && typeof pkg.version === "string") return pkg;
+		} catch { /* try standalone layout */ }
+	}
+	return JSON.parse(await readFile(new URL("./package.json", import.meta.url), "utf8"));
 }
 
 export const RELEASE_URL = "https://github.com/kuraneko1/dsh-mobile-maxxing/releases";
@@ -541,15 +564,16 @@ export function apply(ctx, config) {
       handler: readOnly(async (req, res) => {
         if (!guardUpdate(req, res)) return;
         try {
-          checkedRelease = null;
-          const pkg = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
+          const pkg = await readOwnManifest();
           const dsh = dshVersion();
           // ?local=1 answers the versions only: the Updates panel shows them
-          // the moment it opens, without a GitHub round trip.
+          // the moment it opens, without a GitHub round trip or invalidating
+          // a confirmed release check from another tab/component.
           if (/[?&]local=1(&|$)/.test(req.url || "")) {
             respond(res, req.method, 200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }, JSON.stringify({ current: pkg.version, dsh }));
             return;
           }
+          checkedRelease = null;
           const latest = await fetchLatestRelease();
           const comparison = compareReleaseVersions(pkg.version, latest);
           const available = comparison < 0;

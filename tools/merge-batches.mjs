@@ -85,7 +85,8 @@ export function mergeReviewedBatches(options = {}) {
 	const { upstream, dictionaries: english } = loadEnglish(packageDir);
 	const batchDocument = readJsonFile(paths.batchesFile);
 	const batches = validateBatchManifest(batchDocument, upstream, english);
-	const { dictionaries: currentJapanese, warnings } = loadJapanese(upstream, english, packageDir);
+	const { dictionaries: currentJapanese } = loadJapanese(upstream, english, packageDir);
+	const warnings = [];
 
 	const reviewFile = path.join(workDir, 'reviewed.json');
 	if (!fs.existsSync(reviewFile)) {
@@ -146,8 +147,14 @@ export function mergeReviewedBatches(options = {}) {
 		nextJapanese[namespace] = { ...dictionary };
 	}
 	for (const [namespace, target] of updates) {
-		nextJapanese[namespace] ??= {};
-		for (const [key, value] of target) nextJapanese[namespace][key] = value;
+		const existing = nextJapanese[namespace] ?? {};
+		const merged = { ...existing };
+		for (const [key, value] of target) merged[key] = value;
+		const ordered = {};
+		for (const key of Object.keys(english[namespace])) {
+			if (Object.hasOwn(merged, key)) ordered[key] = merged[key];
+		}
+		nextJapanese[namespace] = ordered;
 	}
 	for (const [namespace, dictionary] of Object.entries(nextJapanese)) {
 		for (const [key, value] of Object.entries(dictionary)) {
@@ -159,8 +166,9 @@ export function mergeReviewedBatches(options = {}) {
 
 	const writes = [];
 	for (const namespace of updates.keys()) {
-		const file = path.join(paths.jaDir, namespace + '.json');
-		const temporary = path.join(paths.jaDir, '.' + namespace + '.json.tmp-' + process.pid + '-' + writes.length);
+		const fileName = upstream.namespaces[namespace].fileName;
+		const file = path.join(paths.jaDir, fileName);
+		const temporary = path.join(paths.jaDir, '.' + fileName + '.tmp-' + process.pid + '-' + writes.length);
 		writes.push({ namespace, file, temporary, content: jsonText(nextJapanese[namespace]) });
 	}
 	const jaPrefix = paths.jaDir + path.sep;

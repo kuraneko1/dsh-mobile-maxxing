@@ -138,7 +138,31 @@ test('writeSnapshot writes only the English snapshot and upstream.json, leaving 
 		const problems = checkSnapshot(snapshot, output);
 		assert.equal(problems.some((problem) => problem.startsWith('different ') && problem.includes('fixture.alpha.json')), true);
 		assert.equal(problems.some((problem) => problem.startsWith('stale ') && problem.includes('stale.json')), true);
+
+		// writeSnapshot prunes stale *.json files from namespaces/en
+		writeSnapshot(snapshot, output);
+		assert.deepEqual(checkSnapshot(snapshot, output), []);
 	} finally {
 		fs.rmSync(output, { recursive: true, force: true });
 	}
+});
+
+test('extractor supports 0-arg join() and same-named ForOf loop variable without false cycle', async (t) => {
+	const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-extract-t2-'));
+	t.after(() => fs.rmSync(tempRoot, { recursive: true, force: true }));
+	const scopeDir = path.join(tempRoot, '@deepseek-ai');
+	const dshDir = path.join(scopeDir, 'dsh');
+	const pluginDir = path.join(scopeDir, 'dsh-fixture-loop');
+	fs.mkdirSync(dshDir, { recursive: true });
+	fs.writeFileSync(path.join(dshDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.2' }));
+	fs.mkdirSync(path.join(pluginDir, 'lib'), { recursive: true });
+	fs.writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-fixture-loop', version: '0.0.1', dsh: { client: { entry: './lib/client.js' } } }));
+	fs.writeFileSync(path.join(pluginDir, 'lib', 'client.js'), `
+		const names = ['loop.key'];
+		for (const names of names) {
+			locale.register('fixture.loop', { en: { [names]: ['a', 'b'].join() }, zh: { [names]: '値' } });
+		}
+	`);
+	const snapshot = await buildSnapshot({ dshRoot: scopeDir });
+	assert.equal(snapshot.dictionaries['fixture.loop'].en['loop.key'], 'a,b');
 });

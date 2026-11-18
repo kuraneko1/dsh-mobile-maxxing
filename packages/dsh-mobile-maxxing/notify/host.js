@@ -25,10 +25,11 @@ import {
 	sign,
 } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { copyFor } from "../lib/copy.js";
-import { securePushRequest } from "./secure-push.js";
+import { isPublicPushAddress, securePushRequest } from "./secure-push.js";
 
 /** How long a push stays queued when the phone is offline. */
 const PUSH_TTL_SECONDS = 600;
@@ -140,6 +141,8 @@ export function endpointAudience(endpoint) {
 
 /** The record size advertised in the framing header. */
 const RECORD_SIZE = 4096;
+/** Single-record RFC 8188 payload ceiling (4096 minus 86B header, 0x02 delimiter and 16B tag). */
+const MAX_PUSH_PLAINTEXT_BYTES = RECORD_SIZE - 86 - 1 - 16;
 
 /**
  * Encrypt one push payload for one subscription.
@@ -149,6 +152,10 @@ const RECORD_SIZE = 4096;
  * @returns {Buffer} the complete `aes128gcm` body.
  */
 export function encryptPushPayload(subscription, plaintext) {
+	const rawPlaintext = Buffer.isBuffer(plaintext) ? plaintext : Buffer.from(plaintext, "utf8");
+	if (rawPlaintext.length > MAX_PUSH_PLAINTEXT_BYTES) {
+		throw new RangeError(`push plaintext exceeds single RFC 8188 record limit (${rawPlaintext.length} > ${MAX_PUSH_PLAINTEXT_BYTES})`);
+	}
 	const userAgentPublic = fromBase64Url(subscription.keys.p256dh);
 	const authSecret = fromBase64Url(subscription.keys.auth);
 
@@ -180,7 +187,7 @@ export function encryptPushPayload(subscription, plaintext) {
 	));
 
 	// One record only: append the 0x02 padding delimiter that marks the last.
-	const record = Buffer.concat([Buffer.from(plaintext, "utf8"), Buffer.from([2])]);
+	const record = Buffer.concat([rawPlaintext, Buffer.from([2])]);
 	const cipher = createCipheriv("aes-128-gcm", contentEncryptionKey, nonce);
 	const ciphertext = Buffer.concat([cipher.update(record), cipher.final(), cipher.getAuthTag()]);
 
@@ -376,37 +383,56 @@ export function buildQuestionPayload(request, context = {}) {
  * `sessionId` rides along so the service worker can tag per session and hand
  * the id back to a live window: the SPA has no URL routing.
  */
+const MAX_TITLE_CHARS = 120;
+const MAX_BODY_CHARS = 700;
+const MAX_SESSION_ID_CHARS = 256;
+
+/**
+ * One notification payload.
+ *
+ * `sessionId` rides along so the service worker can tag per session and hand
+ * the id back to a live window: the SPA has no URL routing.
+ */
 export function makePayload(sessionId, kind, title, body) {
-	const id = typeof sessionId === "string" ? sessionId : "";
-	return {
-		title: clip(title, MAX_TITLE_CHARS),
-		body: clip(body, MAX_BODY_CHARS),
+	const rawId = typeof sessionId === "string" ? sessionId : "";
+	const idChars = Array.from(rawId);
+	const id = idChars.length > MAX_SESSION_ID_CHARS ? idChars.slice(0, MAX_SESSION_ID_CHARS).join("") : rawId;
+	const url = id === "" ? "./" : `./?session=${encodeURIComponent(id)}`;
+	const clippedTitle = clip(title, MAX_TITLE_CHARS);
+	let bodyChars = Array.from(clip(body, MAX_BODY_CHARS));
+	const build = () => ({
+		title: clippedTitle,
+		body: bodyChars.join(""),
 		kind,
 		sessionId: id,
-		url: id === "" ? "./" : `./?session=${encodeURIComponent(id)}`,
-	};
+		url,
+	});
+	let payload = build();
+	while (Buffer.byteLength(JSON.stringify(payload), "utf8") > MAX_PUSH_PLAINTEXT_BYTES && bodyChars.length > 0) {
+		const overshoot = Buffer.byteLength(JSON.stringify(payload), "utf8") - MAX_PUSH_PLAINTEXT_BYTES;
+		const nextLen = Math.max(0, bodyChars.length - Math.max(1, Math.ceil(overshoot / 4)));
+		bodyChars = nextLen > 1 ? [...bodyChars.slice(0, nextLen - 1), "…"] : [];
+		payload = build();
+	}
+	if (Buffer.byteLength(JSON.stringify(payload), "utf8") > MAX_PUSH_PLAINTEXT_BYTES && Array.from(payload.title).length > 32) {
+		payload.title = clip(payload.title, 32);
+	}
+	return payload;
 }
 
 /**
- * Notification copy is capped so one payload stays inside a single
- * `aes128gcm` record. RFC 8188 puts the record size in the header and this
- * implementation declares 4096 bytes; a longer body would produce a body that
- * no receiver can parse.
- */
-const MAX_TITLE_CHARS = 120;
-const MAX_BODY_CHARS = 700;
-
-/**
- * Cut a string to a character budget, marking the cut with an ellipsis.
+ * Cut a string to a Unicode code-point budget, marking the cut with an ellipsis.
  *
  * @param {string} value - text to shorten.
- * @param {number} limit - maximum characters kept.
- * @returns {string} the text, at most `limit` characters plus the ellipsis.
+ * @param {number} limit - maximum Unicode code points kept.
+ * @returns {string} the text, at most `limit` code points including the ellipsis.
  */
 function clip(value, limit) {
 	const text = typeof value === "string" ? value : "";
-	if (text.length <= limit) return text;
-	return `${text.slice(0, limit - 1)}…`;
+	const chars = Array.from(text);
+	if (chars.length <= limit) return text;
+	if (limit <= 0) return "";
+	return `${chars.slice(0, limit - 1).join("")}…`;
 }
 
 /**
@@ -469,13 +495,13 @@ function rejectEndpoint(endpoint) {
 		return "subscription endpoint is not a URL";
 	}
 	if (url.protocol !== "https:") return "subscription endpoint must be https";
+	if (url.username || url.password) return "subscription endpoint must not embed credentials";
 	// A push service is a public host; anything the OS resolves locally is not.
-	const host = url.hostname;
+	const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
 	if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) {
 		return "subscription endpoint must be a public push service";
 	}
-	if (/^(?:127\.|10\.|192\.168\.|169\.254\.|\[|0\.)/.test(host)) return "subscription endpoint must be a public push service";
-	if (/^172\.(?:1[6-9]|2\d|3[01])\./.test(host)) return "subscription endpoint must be a public push service";
+	if (isIP(host) && !isPublicPushAddress(host)) return "subscription endpoint must be a public push service";
 	return undefined;
 }
 
@@ -503,6 +529,15 @@ function uniqueByEndpoint(subscriptions) {
 	return unique;
 }
 
+function hasValidVapid(vapid) {
+	return vapid !== null
+		&& typeof vapid === "object"
+		&& typeof vapid.publicKey === "string"
+		&& vapid.publicKey !== ""
+		&& typeof vapid.privateKey === "string"
+		&& vapid.privateKey !== "";
+}
+
 /** Subscriptions and the VAPID pair, persisted together. */
 export class PushStore {
 	/**
@@ -510,12 +545,22 @@ export class PushStore {
 	 */
 	constructor(file) {
 		this.file = file;
-		this.state = readJson(file, null) ?? { vapid: null, subscriptions: [] };
-		if (this.state.vapid === null || typeof this.state.vapid.publicKey !== "string") {
-			this.state.vapid = generateVapidKeys();
-			this.save();
-		}
+		const loaded = readJson(file, null);
+		const validState = loaded !== null && typeof loaded === "object" && !Array.isArray(loaded);
+		this.state = validState ? loaded : { vapid: null, subscriptions: [] };
 		if (!Array.isArray(this.state.subscriptions)) this.state.subscriptions = [];
+		if (!hasValidVapid(this.state.vapid)) {
+			// Re-read just before writing in case another profile generated the
+			// VAPID pair concurrently on the same DSH_HOME.
+			const fresh = readJson(file, null);
+			if (fresh !== null && typeof fresh === "object" && !Array.isArray(fresh) && hasValidVapid(fresh.vapid)) {
+				this.state.vapid = fresh.vapid;
+				if (Array.isArray(fresh.subscriptions)) this.state.subscriptions = fresh.subscriptions;
+			} else {
+				this.state.vapid = generateVapidKeys();
+				this.save();
+			}
+		}
 	}
 
 	/**
@@ -530,11 +575,12 @@ export class PushStore {
 		writeJsonAtomically(this.file, this.state);
 	}
 
-	/** Re-read the file, keeping this process's VAPID pair. */
+	/** Re-read the file, keeping this process's VAPID pair unless disk already has a valid one. */
 	reload() {
 		const fresh = readJson(this.file, null);
-		if (fresh !== null && typeof fresh === "object" && Array.isArray(fresh.subscriptions)) {
-			this.state.subscriptions = fresh.subscriptions;
+		if (fresh !== null && typeof fresh === "object" && !Array.isArray(fresh)) {
+			if (Array.isArray(fresh.subscriptions)) this.state.subscriptions = fresh.subscriptions;
+			if (!hasValidVapid(this.state.vapid) && hasValidVapid(fresh.vapid)) this.state.vapid = fresh.vapid;
 		}
 	}
 
@@ -589,6 +635,9 @@ export class PushStore {
 		if (typeof endpoint !== "string" || endpoint === "") throw new Error("subscription has no endpoint");
 		if (typeof subscription?.keys?.p256dh !== "string" || typeof subscription?.keys?.auth !== "string") {
 			throw new Error("subscription has no client keys");
+		}
+		if (fromBase64Url(subscription.keys.p256dh).length !== 65 || fromBase64Url(subscription.keys.auth).length !== 16) {
+			throw new Error("subscription has invalid client keys");
 		}
 		// The host POSTs to whatever is stored here, so an unvalidated endpoint
 		// would let a caller park an internal URL in the store and have every

@@ -94,18 +94,27 @@ function main() {
 		// Keep the install commands on the version just packed: a version-free install
 		// URL is cached by pnpm, so the docs must point at the versioned one.
 		const releaseTag = process.env.DSH_RELEASE_TAG ?? `v${mobile.version}`;
+		const markdownDir = join(root, "packages", "dsh-md-rendering");
+		const markdownManifest = JSON.parse(readFileSync(join(markdownDir, "package.json"), "utf8"));
+		const markdownFile = tarballName(markdownManifest);
 		const url = `https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/${releaseTag}/${mobile.file}`;
-		for (const doc of [join(root, "README.md"), join(root, "packages", mobile.name, "README.md")]) {
+		const markdownUrl = `https://github.com/kuraneko1/dsh-mobile-maxxing/releases/download/${releaseTag}/${markdownFile}`;
+		for (const doc of [join(root, "README.md"), join(root, "README.zh-CN.md"), join(root, "packages", mobile.name, "README.md")]) {
 			let text;
 			try {
 				text = readFileSync(doc, "utf8");
 			} catch {
 				continue;
 			}
-			const updated = text.replace(
-				new RegExp(`https://github\\.com/kuraneko1/dsh-mobile-maxxing/releases/download/v[^/]+/${mobile.name}[\\w.\\-]*\\.tgz`, "g"),
-				url,
-			);
+			const updated = text
+				.replace(
+					new RegExp(`https://github\\.com/kuraneko1/dsh-mobile-maxxing/releases/download/v[^/]+/${mobile.name}[\\w.\\-]*\\.tgz`, "g"),
+					url,
+				)
+				.replace(
+					/https:\/\/github\.com\/kuraneko1\/dsh-mobile-maxxing\/releases\/download\/v[^/]+\/dsh-md-rendering[\w.\-]*\.tgz/g,
+					markdownUrl,
+				);
 			if (updated !== text) {
 				originalDocs.set(doc, text);
 				writeFileSync(doc, updated);
@@ -121,8 +130,6 @@ function main() {
 		console.log(`packed ${mobile.file} (+ ${mobile.alias})`);
 		packed.push(mobile);
 
-		const markdownDir = join(root, "packages", "dsh-md-rendering");
-		const markdownManifest = JSON.parse(readFileSync(join(markdownDir, "package.json"), "utf8"));
 		packed.push(packDirectory(markdownDir, markdownManifest, staging));
 
 		let localeStatus;

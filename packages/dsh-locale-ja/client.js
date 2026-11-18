@@ -577,7 +577,7 @@ window.__ModuleLoader__.load({
 				"row.imageSize": "{width}x{height}px、{bytes} バイト",
 				"row.imageSizeDownscaled": "{width}x{height}px（{originalWidth}x{originalHeight}px から縮小）、{bytes} バイト",
 				"row.input": "入力",
-				"row.inspect": "Inspect",
+				"row.inspect": "確認",
 				"row.output": "出力",
 				"row.preparing": "ツール呼び出しを準備中",
 				"row.running": "実行中",
@@ -3086,7 +3086,6 @@ window.__ModuleLoader__.load({
 
 		function apply(ctx) {
 			if (japaneseIsDefined(ctx.locale)) return;
-			ctx.effect(() => ctx.locale.addLanguage(language), "dsh-locale-ja: addLanguage(ja)");
 
 			// agent-team: 25/25 translated, 0 development-only English fallbacks.
 			ctx.effect(() => ctx.locale.register("agent-team", "ja", dictionaries["agent-team"]), "dsh-locale-ja: agent-team");
@@ -3282,6 +3281,8 @@ window.__ModuleLoader__.load({
 
 			// workspace: 119/119 translated, 0 development-only English fallbacks.
 			ctx.effect(() => ctx.locale.register("workspace", "ja", dictionaries["workspace"]), "dsh-locale-ja: workspace");
+
+			ctx.effect(() => ctx.locale.addLanguage(language), "dsh-locale-ja: addLanguage(ja)");
 		}
 
 		exports.language = language;

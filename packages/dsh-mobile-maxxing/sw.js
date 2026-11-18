@@ -88,6 +88,9 @@ button:active{transform:scale(.98)}
 function isBypassed(url) {
 	// A proxy prefix such as /dsh/ keeps working: compare from the scope path.
 	const path = url.pathname.slice(SCOPE.pathname.length - 1);
+	if (url.searchParams?.has("token")) return true;
+	if (path === "/connect" || path.startsWith("/connect/")) return true;
+	if (path === "/plugins/events" || path.startsWith("/plugins/events/")) return true;
 	return BYPASS_SEGMENTS.some((segment) => path === segment || path.startsWith(segment + "/"));
 }
 
@@ -100,6 +103,13 @@ function isStatic(url) {
 /** Fetch with a deadline; the abort looks like any other network failure. */
 async function fetchWithTimeout(request, timeoutMs) {
 	if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return fetch(request);
+	// Passing init (`{ signal }`) to fetch(navigateRequest, init) changes
+	// mode from "navigate" to "same-origin" per the Fetch spec.
+	if (request?.mode === "navigate") {
+		const pending = fetch(request);
+		void Promise.resolve(pending).catch(() => {});
+		return withTimeout(pending, timeoutMs);
+	}
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
 	try {
@@ -143,19 +153,145 @@ async function put(cache, request, response) {
 	}
 }
 
-async function handleNavigation(request) {
-	const cache = await caches.open(CACHE_NAME);
-	const cached = await cache.match(SHELL_URL);
+/** Settle with the promise, or reject once the navigation budget is spent. */
+function withTimeout(promise, timeoutMs) {
+	if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+	let timer = 0;
+	const expired = new Promise((resolve, reject) => {
+		timer = setTimeout(() => reject(new Error("navigation timeout")), timeoutMs);
+	});
+	return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
+}
+
+const SHELL_SKIP_EXTENSIONS = /\.(?:png|jpe?g|gif|webp|avif|svg|ico|css|m?js|json|webmanifest|woff2?|ttf|otf|map|pdf|txt|xml)$/i;
+
+function canStoreAsShell(requestUrl, response) {
+	if (!response || !response.ok || response.type !== "basic") return false;
+	const contentType = response.headers?.get?.("content-type");
+	if (typeof contentType === "string" && contentType.trim() !== "" && !contentType.toLowerCase().includes("text/html")) {
+		return false;
+	}
+	let parsed;
 	try {
-		const response = await fetchWithTimeout(request, NAVIGATION_TIMEOUT_MS);
-		if (response.ok && response.type === "basic") {
+		parsed = new URL(requestUrl);
+	} catch {
+		return true;
+	}
+	const relative = parsed.pathname.slice(SCOPE.pathname.length);
+	if (relative === "") return true;
+	if (relative.startsWith("dsh-mobile-maxxing/")) return false;
+	if (STATIC_FILES.has(relative) || STATIC_PREFIXES.some((prefix) => relative.startsWith(prefix))) return false;
+	return !SHELL_SKIP_EXTENSIONS.test(parsed.pathname);
+}
+
+function extractShellAssets(html, scriptsOnly = false) {
+	if (typeof html !== "string" || html === "") return [];
+	const urls = new Set();
+	for (const match of html.matchAll(/<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi)) {
+		try {
+			const resolved = new URL(match[1], SHELL_URL);
+			if (resolved.origin === SCOPE.origin && isStatic(resolved)) urls.add(resolved.href);
+		} catch {}
+	}
+	if (!scriptsOnly) {
+		for (const match of html.matchAll(/<link\b[^>]*>/gi)) {
+			const tag = match[0];
+			const rel = /\brel\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1]?.toLowerCase() ?? "";
+			if (rel !== "stylesheet" && rel !== "modulepreload") continue;
+			const href = /\bhref\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1];
+			if (!href) continue;
+			try {
+				const resolved = new URL(href, SHELL_URL);
+				if (resolved.origin === SCOPE.origin && isStatic(resolved)) urls.add(resolved.href);
+			} catch {}
+		}
+	}
+	return [...urls];
+}
+
+async function precacheShellAssets(cache, html) {
+	const assets = extractShellAssets(html, false);
+	if (assets.length === 0) return;
+	for (const assetUrl of assets) {
+		try {
+			if ((await cache.match(assetUrl)) !== undefined) continue;
+			const assetResponse = await fetch(assetUrl);
+			if (assetResponse && assetResponse.ok) await put(cache, assetUrl, assetResponse);
+		} catch {
+			/* ignore single asset failure; navigation fallback checks script presence */
+		}
+	}
+	await trim(cache);
+}
+
+async function shellReadyOffline(cache, cached) {
+	if (cached === undefined || typeof cached.clone !== "function") return false;
+	let html = "";
+	try {
+		const copy = cached.clone();
+		if (typeof copy.text === "function") html = await copy.text();
+	} catch {
+		return true;
+	}
+	const scripts = extractShellAssets(html, true);
+	for (const scriptUrl of scripts) {
+		try {
+			if ((await cache.match(scriptUrl)) === undefined) return false;
+		} catch {
+			return false;
+		}
+	}
+	return true;
+}
+
+/**
+ * The network answer for a navigation. Navigation preload (enabled at
+ * activation) starts the request while the worker is still booting; without
+ * it the request only left once the worker had started and run this handler.
+ */
+async function navigationResponse(event) {
+	const preload = event.preloadResponse;
+	if (preload !== undefined && preload !== null) {
+		const settledPreload = Promise.resolve(preload).catch(() => undefined);
+		if (typeof event.waitUntil === "function") event.waitUntil(settledPreload);
+		const preloaded = await withTimeout(preload, NAVIGATION_TIMEOUT_MS);
+		if (preloaded) return preloaded;
+	}
+	return fetchWithTimeout(event.request, NAVIGATION_TIMEOUT_MS);
+}
+
+/**
+ * Network first, the cached shell when the network fails or is too slow.
+ *
+ * The page gets the response as soon as it arrives: storing the shell runs in
+ * the background (waitUntil). Awaiting the cache write first held the whole
+ * document back until it had downloaded and been written, so the browser
+ * could not start parsing it.
+ */
+async function handleNavigation(event) {
+	try {
+		const response = await navigationResponse(event);
+		if (canStoreAsShell(event.request?.url ?? SHELL_URL, response)) {
 			// Canonical key: the launch URL may carry auth fragments or query
 			// parameters that must not multiply shell entries.
-			await put(cache, SHELL_URL, response.clone());
+			const copy = response.clone();
+			const assetCopy = typeof response.clone === "function" ? response.clone() : null;
+			event.waitUntil((async () => {
+				const cache = await caches.open(CACHE_NAME);
+				await put(cache, SHELL_URL, copy);
+				if (assetCopy !== null && typeof assetCopy.text === "function") {
+					try {
+						await precacheShellAssets(cache, await assetCopy.text());
+					} catch {}
+				}
+			})());
 		}
 		return response;
 	} catch {
-		return cached ?? offlineResponse();
+		const cache = await caches.open(CACHE_NAME);
+		const cached = await cache.match(SHELL_URL);
+		if (cached === undefined) return offlineResponse();
+		return (await shellReadyOffline(cache, cached)) ? cached : offlineResponse();
 	}
 }
 
@@ -170,7 +306,13 @@ function freshStaticResponse(response, now = Date.now()) {
  return now - date + age * 1000 < Number(lifetime[1]) * 1000;
 }
 
-async function handleStatic(request) {
+/**
+ * @param {Request} request
+ * @param {(work: Promise<void>) => void} [defer] keeps the worker alive for
+ *   background work (the fetch event's waitUntil). Without it the cache write
+ *   is awaited before the response is returned.
+ */
+async function handleStatic(request, defer) {
 	const cache = await caches.open(CACHE_NAME);
 	const cached = await cache.match(request);
 	if (cached !== undefined) {
@@ -178,18 +320,27 @@ async function handleStatic(request) {
 		// write or full key scan. Expired responses still revalidate (#144).
 		if (freshStaticResponse(cached)) return cached;
 		// Mutable assets still revalidate; replacement cannot grow this cache.
-		fetch(request)
+		const revalidate = fetch(request)
 			.then(async (response) => {
 				if (response.ok) await put(cache, request, response);
 			})
 			.catch(() => {});
+		if (typeof defer === "function") defer(revalidate);
 		return cached;
 	}
 	try {
 		const response = await fetch(request);
 		if (response.ok) {
-			await put(cache, request, response.clone());
-			await trim(cache);
+			// The page reads the body while it is being stored: a first visit no
+			// longer waits for each chunk to be fully cached (and the key scan of
+			// trim) before it can parse it.
+			const copy = response.clone();
+			const store = (async () => {
+				await put(cache, request, copy);
+				await trim(cache);
+			})();
+			if (typeof defer === "function") defer(store);
+			else await store;
 		}
 		return response;
 	} catch {
@@ -212,7 +363,15 @@ self.addEventListener("install", (event) => {
 		for (const url of [SHELL_URL, MANIFEST_URL]) {
 			try {
 				const response = await fetch(url, { cache: "reload" });
-				if (response.ok) await put(cache, url, response);
+				if (response.ok) {
+					const assetCopy = url === SHELL_URL && typeof response.clone === "function" ? response.clone() : null;
+					await put(cache, url, response);
+					if (assetCopy !== null && typeof assetCopy.text === "function") {
+						try {
+							await precacheShellAssets(cache, await assetCopy.text());
+						} catch {}
+					}
+				}
 			} catch {
 				/* leave install to succeed; the navigation handler repairs later */
 			}
@@ -224,6 +383,12 @@ self.addEventListener("activate", (event) => {
 	event.waitUntil((async () => {
 		for (const key of await caches.keys()) {
 			if (key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME) await caches.delete(key);
+		}
+		// Start navigation requests in parallel with booting this worker.
+		try {
+			await self.registration.navigationPreload?.enable();
+		} catch {
+			/* unsupported: navigations fall back to fetch() in the handler */
 		}
 		await self.clients.claim();
 	})());
@@ -237,12 +402,12 @@ self.addEventListener("fetch", (event) => {
 	if (isBypassed(url)) return;
 	if (request.headers.get("range") !== null) return;
 	if (request.mode === "navigate") {
-		event.respondWith(handleNavigation(request));
+		event.respondWith(handleNavigation(event));
 		return;
 	}
 	// A dev reload asks for fresh bytes; let the network answer it untouched.
 	if (request.cache === "no-store") return;
-	if (isStatic(url)) event.respondWith(handleStatic(request));
+	if (isStatic(url)) event.respondWith(handleStatic(request, (work) => event.waitUntil(work)));
 });
 
 /*
@@ -302,7 +467,11 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
 	event.notification.close();
 	const data = (event.notification.data && typeof event.notification.data === "object") ? event.notification.data : {};
-	const target = typeof data.url === "string" && data.url !== "" ? data.url : new URL("./", SCOPE).href;
+	const target = typeof data.url === "string" && data.url !== "" ? data.url : SHELL_URL;
+	let resolvedTarget = SHELL_URL;
+	try {
+		resolvedTarget = new URL(target, SCOPE).href;
+	} catch {}
 	const sessionId = typeof data.sessionId === "string" ? data.sessionId : "";
 	event.waitUntil((async () => {
 		const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
@@ -325,13 +494,19 @@ self.addEventListener("notificationclick", (event) => {
 				client.postMessage({ type: "dsh-mobile-maxxing:open-session", sessionId });
 				return;
 			}
-			if (target !== new URL("./", SCOPE).href && "navigate" in client) {
-				await client.navigate(target);
-				return;
+			if (resolvedTarget !== SHELL_URL && new URL(resolvedTarget).origin === SCOPE.origin && "navigate" in client) {
+				try {
+					await client.navigate(resolvedTarget);
+					return;
+				} catch {
+					// Uncontrolled windows throw TypeError on client.navigate();
+					// fall through to another client or openWindow().
+					continue;
+				}
 			}
 			return;
 		}
-		await self.clients.openWindow(target);
+		await self.clients.openWindow(resolvedTarget);
 	})());
 });
 
@@ -356,13 +531,16 @@ self.addEventListener("message", (event) => {
 self.addEventListener("pushsubscriptionchange", (event) => {
 	event.waitUntil((async () => {
 		try {
-			const response = await fetch(new URL("api/dsh-mobile-maxxing/push/vapid", SCOPE), { cache: "no-store" });
-			if (!response.ok) throw new Error("push key unavailable");
-			const { publicKey } = await response.json();
-			const padding = "=".repeat((4 - (publicKey.length % 4)) % 4);
-			const raw = atob((publicKey + padding).replace(/-/g, "+").replace(/_/g, "/"));
-			const key = new Uint8Array([...raw].map((character) => character.charCodeAt(0)));
-			const subscription = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+			let subscription = event.newSubscription ?? null;
+			if (subscription === null) {
+				const response = await fetch(new URL("api/dsh-mobile-maxxing/push/vapid", SCOPE), { cache: "no-store" });
+				if (!response.ok) throw new Error("push key unavailable");
+				const { publicKey } = await response.json();
+				const padding = "=".repeat((4 - (publicKey.length % 4)) % 4);
+				const raw = atob((publicKey + padding).replace(/-/g, "+").replace(/_/g, "/"));
+				const key = new Uint8Array([...raw].map((character) => character.charCodeAt(0)));
+				subscription = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+			}
 			// The host retires the endpoint this rotation replaced (#98). The
 			// page keeps its own copy in localStorage, which a worker cannot
 			// read, so the replaced registration is named here instead.

@@ -56,7 +56,7 @@ test('the package is a separate, private web client with its own exports', () =>
 	assert.ok(manifest.files.includes('cordis.patch.yml'));
 	assert.deepEqual(manifest.dsh?.client?.inject, ['@deepseek-ai/dsh-client-locale']);
 	assert.equal(manifest.peerDependencies?.['@deepseek-ai/dsh-client-locale'], meta.clientLocalePeer);
-	assert.equal(meta.clientLocalePeer, '0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.2-alpha.2 || 0.2.2-rc.1 || 0.2.2-rc.3', 'both distribution channels must advertise the same peer range');
+	assert.equal(meta.clientLocalePeer, '0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.2-alpha.2 || 0.2.2-rc.1 || 0.2.2-rc.3 || 0.2.2-rc.4', 'both distribution channels must advertise the same peer range');
 	assert.equal(manifest.exports?.['.'], './index.js');
 	assert.equal(manifest.exports?.['./client'], './client.js');
 	for (const target of Object.values(manifest.exports)) {
@@ -351,7 +351,7 @@ syncBuiltinESMExports();`);
 
 test('packed locale accepts every advertised peer under strict resolution', (t) => {
 	const { file } = pack(t);
-	for (const version of ['0.2.1-rc.2', '0.2.1-rc.3', '0.2.2-alpha.2', '0.2.2-rc.1', '0.2.2-rc.3']) {
+	for (const version of ['0.2.1-rc.2', '0.2.1-rc.3', '0.2.2-alpha.2', '0.2.2-rc.1', '0.2.2-rc.3', '0.2.2-rc.4']) {
 		const dir = temporaryDirectory(t);
 		const peer = path.join(dir, 'peer');
 		fs.mkdirSync(peer);

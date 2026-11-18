@@ -382,10 +382,24 @@ test("a field inside a modal is not blurred by the focus guard", () => {
 	};
 	vm.createContext(sandbox);
 	vm.runInContext(body, sandbox);
-	const shell = { closest: () => null };
-	const modal = { closest: (sel) => sel === '[role="dialog"]' ? shell : null };
-	const nested = { closest: (sel) => sel === '[role="dialog"]' ? modal : null };
+	const shell = {
+		parentElement: null,
+		closest: () => shell,
+		querySelector: (sel) => (/\[data-rdsh-frame\]/.test(sel) ? {} : null),
+	};
+	const modal = {
+		parentElement: { closest: (sel) => (sel === '[role="dialog"]' ? shell : null) },
+		closest: (sel) => (sel === '[role="dialog"]' ? modal : null),
+		querySelector: () => null,
+	};
+	const standaloneModal = {
+		parentElement: null,
+		closest: (sel) => (sel === '[role="dialog"]' ? standaloneModal : null),
+		querySelector: () => null,
+	};
+	const nested = { closest: (sel) => (sel === '[role="dialog"]' ? modal : null) };
 	assert.equal(sandbox.modalOwnedField(nested), true, "a nested dialog's field is the user's");
+	assert.equal(sandbox.modalOwnedField({ closest: (sel) => (sel === '[role="dialog"]' ? standaloneModal : null) }), true, "a non-shell dialog (DSH 0.2.1) is a modal");
 	assert.equal(sandbox.modalOwnedField({ closest: () => shell }), false, "the shell alone is not a modal");
 	assert.equal(sandbox.modalOwnedField({ closest: () => null }), false, "a plain field is untouched");
 });
@@ -649,8 +663,11 @@ test("the approval card keeps the transcript's gutters on a phone", () => {
 	const block = CLIENT.slice(at, at + 900);
 	assert.match(block, /--dsh-composer-side-clearance: 0px !important;/, "the clearance keeps the shell's 16px");
 	// The shell redefines the variable on its own body element, so the composer
-	// subtree carries the override too; the slot alone was overridden.
-	assert.match(CLIENT, /\[data-slot="conversation\.composer"\] \* \{[\s\S]{0,80}--dsh-composer-side-clearance: 0px !important;/, "the composer subtree keeps it");
+	// subtree carries the override too; the slot alone was overridden. Only the
+	// bodies that define it are targeted (a universal rule was tested by every
+	// element of each restyle).
+	assert.match(CLIENT, /\[data-slot="conversation\.composer"\] :is\(\[class\*="_body"\], \[class\*="_embeddedBody"\]\) \{[\s\S]{0,80}--dsh-composer-side-clearance: 0px !important;/, "the composer subtree keeps it");
+	assert.doesNotMatch(CLIENT, /\[data-slot="conversation\.composer"\] \* \{/, "the universal composer rule is back");
 });
 
 test("the normal input restores its own gutter without narrowing chat or takeover cards", () => {
