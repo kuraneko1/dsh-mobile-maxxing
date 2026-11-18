@@ -26,7 +26,7 @@ export const BATCH_MAX = 50;
 export const STATUS_SCHEMA = 1;
 export const BATCH_SCHEMA = 1;
 
-const PLACEHOLDER_PATTERN = /\{([A-Za-z][A-Za-z0-9_.-]*)\}/gu;
+const PLACEHOLDER_PATTERN = /\{([A-Za-z0-9_][A-Za-z0-9_.-]*)\}/gu;
 
 /** @param {unknown} value */
 export function jsonText(value) {
@@ -508,13 +508,14 @@ export function renderClient(dictionaries, status) {
 	lines.push('');
 	lines.push('\t\tfunction apply(ctx) {');
 	lines.push('\t\t\tif (japaneseIsDefined(ctx.locale)) return;');
-	lines.push('\t\t\tctx.effect(() => ctx.locale.addLanguage(language), "dsh-locale-ja: addLanguage(ja)");');
 	for (const namespace of Object.keys(dictionaries)) {
 		const entry = status.namespaces[namespace];
 		lines.push('');
 		lines.push('\t\t\t// ' + namespace + ': ' + entry.translated + '/' + entry.keys + ' translated, ' + entry.fallback + ' development-only English fallback' + (entry.fallback === 1 ? '' : 's') + '.');
 		lines.push('\t\t\tctx.effect(() => ctx.locale.register(' + JSON.stringify(namespace) + ', "ja", dictionaries[' + JSON.stringify(namespace) + ']), "dsh-locale-ja: ' + namespace + '");');
 	}
+	lines.push('');
+	lines.push('\t\t\tctx.effect(() => ctx.locale.addLanguage(language), "dsh-locale-ja: addLanguage(ja)");');
 	lines.push('\t\t}');
 	lines.push('');
 	lines.push('\t\texports.language = language;');
@@ -573,6 +574,7 @@ export function renderManifest(meta, upstream) {
 			'./locale/translation-status.json': './locale/translation-status.json',
 			'./locale/namespaces/en/*.json': './locale/namespaces/en/*.json',
 			'./locale/namespaces/ja/*.json': './locale/namespaces/ja/*.json',
+			'./package.json': './package.json',
 		},
 		files: exportedFiles,
 		scripts: { test: 'node --test test/*.test.mjs' },

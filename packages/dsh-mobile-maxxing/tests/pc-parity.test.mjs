@@ -258,7 +258,7 @@ test("the route detail's back affordance lives in the mobile stylesheet only", (
 	// mobile-only node.
 	assert.match(
 		phone,
-		/html:has\(\[data-rdsh-route-detail\]\) \.rdsh-mux-fab \{ display: none !important; \}/,
+		/html\[data-rdsh-route-detail-open\] \.rdsh-mux-fab \{ display: none !important; \}/,
 		"the drawer button is not retired on a route detail",
 	);
 	assert.match(

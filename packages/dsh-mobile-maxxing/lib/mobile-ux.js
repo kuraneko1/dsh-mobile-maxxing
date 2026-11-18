@@ -12,6 +12,7 @@ export const inject = [];
 import { createReadStream } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream";
 
 /** Accepted config keys (documented in README.md). */
 export const DEFAULTS = {
@@ -158,7 +159,12 @@ export function apply(ctx, config) {
 			kind: "exact",
 			path: LIVE_SPEED_PATH,
 			handler(req, res) {
-				const rejection = webCtx.connection?.requestRejection(req);
+				if (typeof webCtx.connection?.requestRejection !== "function") {
+					res.writeHead(503);
+					res.end("authentication unavailable");
+					return;
+				}
+				const rejection = webCtx.connection.requestRejection(req);
 				if (rejection !== undefined) {
 					res.writeHead(rejection);
 					res.end(rejection === 401 ? "unauthorized" : "forbidden");
@@ -198,7 +204,12 @@ export function apply(ctx, config) {
 			path: DOWNLOAD_PATH,
 			handler(req, res) {
 				void (async () => {
-					const rejection = dlCtx.connection?.requestRejection(req);
+					if (typeof dlCtx.connection?.requestRejection !== "function") {
+						res.writeHead(503);
+						res.end("authentication unavailable");
+						return;
+					}
+					const rejection = dlCtx.connection.requestRejection(req);
 					if (rejection !== undefined) {
 						res.writeHead(rejection);
 						res.end(rejection === 401 ? "unauthorized" : "forbidden");
@@ -232,8 +243,9 @@ export function apply(ctx, config) {
 						return;
 					}
 					const stream = createReadStream(found.target);
-					stream.on("error", () => res.destroy());
-					stream.pipe(res);
+					pipeline(stream, res, (error) => {
+						if (error && !res.destroyed) res.destroy();
+					});
 				})().catch(() => {
 					if (!res.headersSent) res.writeHead(500);
 					res.end();

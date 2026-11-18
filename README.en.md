@@ -6,7 +6,7 @@
 Make the DeepSeek Harness Web UI useful on phones and tablets without changing the stock desktop experience.
 The release contains three independent components: mobile UX and notifications, mobile Markdown tables, and an optional Japanese locale.
 
-**[v1.0.8 release](https://github.com/kuraneko1/dsh-mobile-maxxing/releases/tag/v1.0.8)** · **[Japanese release notes](RELEASE-NOTES-v1.0.8.md)**
+**[v1.0.9 release](https://github.com/kuraneko1/dsh-mobile-maxxing/releases/tag/v1.0.9)** · **[Japanese release notes](RELEASE-NOTES-v1.0.9.md)**
 
 ## Install all three components
 
@@ -54,9 +54,14 @@ Use the [release command](README.md#リリース). It requires a complete locale
 ## Contributors
 
 - [@kuraneko1](https://github.com/kuraneko1), including commits under `_ryu15_`
-- [@FlowingSPDG](https://github.com/FlowingSPDG)
 - [@AliceSaikawa](https://github.com/AliceSaikawa)
-- Everyone who contributed code review and verification
+- [@FlowingSPDG](https://github.com/FlowingSPDG)
+- [@sahenjp](https://github.com/sahenjp)
+- [@RNA4219](https://github.com/RNA4219)
+- [@yebisu0529-ship-it](https://github.com/yebisu0529-ship-it)
+- [@LYB926](https://github.com/LYB926)
+- [@PyGuy2](https://github.com/PyGuy2)
+- Issue reporters & reviewers: [@neutron42-jp](https://github.com/neutron42-jp), [@tjm8874](https://github.com/tjm8874), [@henaxxx](https://github.com/henaxxx), [@onemunanoyo](https://github.com/onemunanoyo), and everyone who contributed code review and verification
 
 ## License
 

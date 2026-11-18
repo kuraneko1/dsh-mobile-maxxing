@@ -101,6 +101,7 @@ export const COPY = {
 
 		// --- terminal key row ----------------------------------------------
 		"motion.title": "Reduced motion",
+		"motion.system": "Follow OS",
 		"motion.standard": "Standard",
 		"motion.reduced": "Reduced",
 		"motion.off": "Off",
@@ -273,6 +274,11 @@ export const COPY = {
 		"mux.input.current.enterNewline": "Currently: Enter adds a newline. Send with the send button (Shift+Enter also adds a newline).",
 		"mux.liveSpeed.title": "Output speed (estimated from stream deltas)",
 		"mux.liveSpeed.aria": "Estimated speed {speed} tok/s",
+		"queue.edit": "Edit",
+		"queue.sendNow": "Send now",
+		"queue.remove": "Remove",
+		"queue.cancel": "Cancel",
+		"queue.previewAria": "Queued message preview",
 
 		// --- session frame palette ------------------------------------------
 		"frame.menu": "Color frame",
@@ -457,6 +463,7 @@ export const COPY = {
 
 		// --- terminal key row ----------------------------------------------
 		"motion.title": "省アニメーション",
+		"motion.system": "OS設定に合わせる",
 		"motion.standard": "標準",
 		"motion.reduced": "控えめ",
 		"motion.off": "オフ",
@@ -629,6 +636,11 @@ export const COPY = {
 		"mux.input.current.enterNewline": "現在: Enter で改行。送信は送信ボタンから（Shift+Enter も改行）。",
 		"mux.liveSpeed.title": "出力速度（ストリーム差分からの概算）",
 		"mux.liveSpeed.aria": "推定速度 {speed} tok/s",
+		"queue.edit": "編集",
+		"queue.sendNow": "今すぐ送信",
+		"queue.remove": "削除",
+		"queue.cancel": "キャンセル",
+		"queue.previewAria": "キュー中のメッセージ",
 
 		// --- session frame palette ------------------------------------------
 		"frame.menu": "色枠",
@@ -819,6 +831,10 @@ export const PROBES = {
 	/** The right panel's dock "add tab" control (#132). A dock action needs a
 	 *  mounted session surface, so the phone answers the tap itself. */
 	newRightTab: ["New tab", "新标签页", "新しいタブ"],
+	/** Action buttons inside each queued-message row. */
+	queueEdit: ["Edit queued message", "キューのメッセージを編集"],
+	queueSteer: ["Steer queued message", "キューのメッセージを操作指示として送信"],
+	queueRemove: ["Remove queued message", "キューのメッセージを削除"],
 };
 
 /** Keys the service worker needs, picked out of {@link COPY}. */

@@ -198,6 +198,21 @@ window.__ModuleLoader__.load({
     // Desktop must keep the upstream UI: do not build or apply any plugin part.
     if (DEVICE_MODE !== "mobile") return { apply() {} };
 
+    /**
+     * Resolve a plugin-owned endpoint relative to the current page base so it
+     * works both at the origin root and under a reverse-proxy subpath (e.g. /dsh/).
+     */
+    function appUrl(relativePath) {
+      const clean = String(relativePath).replace(/^\/+/, "");
+      try {
+        const base = (typeof document !== "undefined" && document?.baseURI) || location.href;
+        const resolved = new URL(clean, base);
+        return resolved.origin === location.origin ? resolved.pathname + resolved.search + resolved.hash : resolved.href;
+      } catch {
+        return `/${clean}`;
+      }
+    }
+
     // Keep the DOM marker in step with the value this bundle will use. This is
     // propagation of the host decision, not a second classifier.
     try {
@@ -396,6 +411,7 @@ window.__ModuleLoader__.load({
       choices[id] = value;
       writeLocalChatChoices(choices);
       if (binding.store.getSnapshot() !== value) applyLocalChatValue(binding, value);
+      if (id === "workDetails" || id === "collapse") globalThis.__RDSH_RESET_RENDER_SKIP__?.();
       publishLocalChat();
       return true;
     }
@@ -410,6 +426,7 @@ window.__ModuleLoader__.load({
       if (binding?.store !== undefined && binding?.store !== null && binding.store.getSnapshot() !== binding.baseline) {
         applyLocalChatValue(binding, binding.baseline);
       }
+      if (id === "workDetails" || id === "collapse") globalThis.__RDSH_RESET_RENDER_SKIP__?.();
       publishLocalChat();
       return true;
     }
@@ -875,7 +892,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const installing = reg.installing;
         if (installing === null) return;
         installing.addEventListener("statechange", () => {
-          if (installing.state === "installed") note();
+          if (installing.state === "installed") {
+            note();
+            if (isOwnWorker(installing.scriptURL) && navigator.serviceWorker.controller !== null) {
+              emit({ updateReady: true }, "watch");
+            }
+          }
         });
       });
     }
@@ -1029,13 +1051,17 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
     }
 
+    let onControllerChange = null;
+    let hadController = false;
+
     function navigateWhenControllerChanges() {
-      if (navigator.serviceWorker.controller !== null) {
+      hadController = navigator.serviceWorker.controller !== null;
+      if (hadController) {
         emit({ sw: "active" });
         void pingWorker();
-        return;
       }
-      navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (onControllerChange !== null) return;
+      onControllerChange = () => {
         if (updateRequested) {
           if (!reloading) {
             reloading = true;
@@ -1043,9 +1069,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           }
           return;
         }
-        emit({ sw: "active" }, "controllerchange");
+        const nextUrl = navigator.serviceWorker.controller?.scriptURL;
+        if (hadController && isOwnWorker(nextUrl)) {
+          emit({ sw: "active", updateReady: true }, "controllerchange");
+        } else {
+          emit({ sw: "active" }, "controllerchange");
+        }
+        hadController = navigator.serviceWorker.controller !== null;
         void pingWorker();
-      }, { once: false });
+      };
+      navigator.serviceWorker.addEventListener("controllerchange", onControllerChange, { once: false });
     }
 
     // ---------------------------------------------------------------------
@@ -1094,7 +1127,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function renderToasts() {
       if (toastRoot === null) return;
       const install = showInstallPrompt();
-      const signature = JSON.stringify([state.offline, state.updateReady && !state.updateDismissed, install]);
+      const signature = JSON.stringify([state.offline, state.updateReady && !state.updateDismissed, install, currentLang()]);
       if (signature === renderedSignature) return;
       renderedSignature = signature;
       toastRoot.replaceChildren();
@@ -1285,7 +1318,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const [versions, setVersions] = useState({ plugin: "", dsh: "" });
       useEffect(() => {
         let active = true;
-        fetch("/dsh-mobile-maxxing/plugin-version?local=1", { cache: "no-store" })
+        fetch(appUrl("dsh-mobile-maxxing/plugin-version?local=1"), { cache: "no-store" })
           .then((response) => (response.ok ? response.json() : null))
           .then((data) => {
             if (!active || data === null) return;
@@ -1319,7 +1352,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const checkRelease = async () => {
         setPhase("checking"); setFailure(null);
         try {
-          const response = await fetch("/dsh-mobile-maxxing/plugin-version", { cache: "no-store" });
+          const response = await fetch(appUrl("dsh-mobile-maxxing/plugin-version"), { cache: "no-store" });
           const data = await response.json().catch(() => null);
           if (!response.ok || typeof data?.latest !== "string" || typeof data.available !== "boolean") {
             setFailure(describeFailure(data, `HTTP ${response.status}`));
@@ -1333,7 +1366,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const installRelease = async () => {
         setPhase("installing"); setFailure(null);
         try {
-          const response = await fetch("/dsh-mobile-maxxing/update-plugins", { method: "POST", headers: { "x-dsh-release": release } });
+          const response = await fetch(appUrl("dsh-mobile-maxxing/update-plugins"), { method: "POST", headers: { "x-dsh-release": release } });
           const data = await response.json().catch(() => null);
           if (!response.ok || data?.ok !== true || data.version !== release) {
             setFailure(describeFailure(data, `HTTP ${response.status}`));
@@ -1509,6 +1542,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           document.removeEventListener("visibilitychange", onVisible);
           clearInterval(timer);
           clearTimeout(toastTimer);
+          toastTimer = 0;
+          if (onControllerChange !== null) {
+            navigator.serviceWorker?.removeEventListener("controllerchange", onControllerChange);
+            onControllerChange = null;
+          }
+          hadController = false;
           viewObserver.disconnect();
           unsubscribe();
           restoreRegister();
@@ -2466,7 +2505,36 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function applyMotion() {
-      if (phone()) writeOwnedAttribute(document.documentElement, "data-rdsh-motion", currentMotion());
+      if (!phone()) return;
+      const motion = currentMotion();
+      writeOwnedAttribute(document.documentElement, "data-rdsh-motion", motion);
+      syncOnDemandStyle("motion", motion === "reduced" || motion === "off" ? CSS_MOTION : "");
+    }
+
+    /** Style sheets that exist only while their rules can match. */
+    const onDemandStyles = new Map();
+
+    function syncOnDemandStyle(name, css) {
+      let style = onDemandStyles.get(name) ?? null;
+      if (css === "") {
+        if (style !== null) {
+          style.remove();
+          onDemandStyles.delete(name);
+        }
+        return;
+      }
+      if (style === null || !style.isConnected) {
+        style = document.createElement("style");
+        style.setAttribute("data-rdsh-mux-style", name);
+        document.head.append(style);
+        onDemandStyles.set(name, style);
+      }
+      if (style.textContent !== css) style.textContent = css;
+    }
+
+    function clearOnDemandStyles() {
+      for (const style of onDemandStyles.values()) style.remove();
+      onDemandStyles.clear();
     }
 
     function writeMotion(value) {
@@ -2706,6 +2774,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       });
       emit({ localDisplay: display });
       localDisplayRuntime?.applyTheme();
+      globalThis.__RDSH_RESET_RENDER_SKIP__?.();
     }
 
     function resetLocalDisplayFonts() {
@@ -3330,10 +3399,21 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      */
     function releaseSafeArea() {
       const root = document.documentElement;
+      if (fitFrame !== 0) {
+        cancelAnimationFrame(fitFrame);
+        fitFrame = 0;
+      }
+      fitTop = -1;
+      fitHeight = -1;
+      fitSettled = false;
+      safeAreaKey = "";
       for (const name of ["top", "bottom", "left", "right"]) root.removeAttribute(`data-rdsh-safe-${name}`);
       root.removeAttribute("data-rdsh-native-gap");
       root.removeAttribute("data-rdsh-keyboard");
+      document.querySelector?.("[data-rdsh-kb-room]")?.removeAttribute?.("data-rdsh-kb-room");
       removeHeightProbe();
+      safeAreaProbe?.remove();
+      safeAreaProbe = null;
       root.style.removeProperty("--rdsh-vv-top");
       root.style.removeProperty("--rdsh-vv-height");
       root.style.removeProperty("--rdsh-safe-top");
@@ -3405,6 +3485,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      * work.
      */
     function scheduleFitVisualViewport() {
+      unsettleFit();
       if (fitFrame !== 0) return;
       fitFrame = requestAnimationFrame(() => {
         fitFrame = 0;
@@ -3412,7 +3493,33 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       });
     }
 
+    /**
+     * Whether the last fit found no keyboard to pin to from the viewport alone
+     * (desktop, landscape, no visual viewport, keyboard closed). Only a
+     * viewport event can change that answer, so the decorate pass skips the
+     * fit until one arrives: reading innerWidth, innerHeight and the visual
+     * viewport forces a synchronous layout, and a streamed turn runs a pass
+     * for nearly every chunk.
+     */
+    let fitSettled = false;
+
+    /**
+     * Every viewport handler of the boot block (window resize and rotation,
+     * visual-viewport resize and scroll) calls this first, so a settled answer
+     * never outlives the event that could change it.
+     */
+    function unsettleFit() {
+      fitSettled = false;
+    }
+
+    /** The decorate pass's fit: skipped while nothing can have changed. */
+    function fitVisualViewportPass() {
+      if (fitSettled) return;
+      fitVisualViewport();
+    }
+
     function fitVisualViewport() {
+      if (typeof live === "boolean" && !live) return;
       const root = document.documentElement;
       const viewport = window.visualViewport;
       // Dialogs and landscape composers own their scroll and focus geometry;
@@ -3425,11 +3532,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const drawer = root.getAttribute("data-rdsh-drawer") === "open";
       // On 0.2.2 the app shell itself is a dialog, so 'any dialog open' would
       // switch this off everywhere. Only a modal opened *over* the shell owns
-      // its own keyboard geometry (the directory picker, Settings).
-      const modal = document.querySelector('[role="dialog"] [role="dialog"]');
-      const open = phone() && !landscape && !drawer && viewport !== null && viewport !== undefined && modal === null && keyboardOpen();
+      // its own keyboard geometry (the directory picker, Settings). The
+      // document-wide query runs last: every pass reaches this line, and the
+      // keyboard is closed on almost all of them.
+      const noKeyboard = !phone() || landscape || viewport === null || viewport === undefined || !keyboardOpen();
+      fitSettled = noKeyboard;
+      const open = !noKeyboard && !drawer && document.querySelector('[role="dialog"] [role="dialog"]') === null;
       if (!open) {
         if (root.hasAttribute("data-rdsh-keyboard")) root.removeAttribute("data-rdsh-keyboard");
+        document.querySelector?.("[data-rdsh-kb-room]")?.removeAttribute?.("data-rdsh-kb-room");
         fitTop = -1;
         fitHeight = -1;
         return;
@@ -3489,15 +3600,20 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         releaseSafeArea();
         return;
       }
-      const probe = document.createElement("div");
-      probe.style.cssText = "position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)";
-      document.body.append(probe);
-      const style = getComputedStyle(probe);
+      // One probe for the page's lifetime: inserting and removing a node on
+      // every measurement woke the document observer for a full decorate pass.
+      if (safeAreaProbe === null || !safeAreaProbe.isConnected) {
+        safeAreaProbe = document.createElement("div");
+        safeAreaProbe.setAttribute("aria-hidden", "true");
+        safeAreaProbe.setAttribute("data-rdsh-safe-probe", "");
+        safeAreaProbe.style.cssText = "position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;contain:strict;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)";
+        document.body.append(safeAreaProbe);
+      }
+      const style = getComputedStyle(safeAreaProbe);
       const top = parseFloat(style.paddingTop) || 0;
       const bottom = parseFloat(style.paddingBottom) || 0;
       const left = parseFloat(style.paddingLeft) || 0;
       const right = parseFloat(style.paddingRight) || 0;
-      probe.remove();
       const root = document.documentElement;
       // iOS 26 standalone: the native web view is ~status-bar-height shorter
       // than the screen (screen.height - innerHeight), so the unpainted strip is
@@ -3512,14 +3628,23 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const nativeGap = window.navigator.standalone === true && underStatusBar && !keyboardOpen() && screenHeight > 0 && screenHeight - window.innerHeight > 8;
       root.toggleAttribute("data-rdsh-native-gap", nativeGap);
       for (const [name, value] of [["top", top], ["bottom", bottom], ["left", left], ["right", right]]) {
-        if (value > 0) root.setAttribute(`data-rdsh-safe-${name}`, "");
-        else root.removeAttribute(`data-rdsh-safe-${name}`);
+        if (value > 0) {
+          if (!root.hasAttribute(`data-rdsh-safe-${name}`)) root.setAttribute(`data-rdsh-safe-${name}`, "");
+        } else root.removeAttribute(`data-rdsh-safe-${name}`);
       }
-      root.style.setProperty("--rdsh-safe-top", `${top}px`);
-      root.style.setProperty("--rdsh-safe-bottom", `${bottom}px`);
-      root.style.setProperty("--rdsh-safe-left", `${left}px`);
-      root.style.setProperty("--rdsh-safe-right", `${right}px`);
-      root.style.setProperty("--rdsh-native-gap-px", `${nativeGap ? Math.max(0, Math.round(screenHeight - window.innerHeight)) : 0}px`);
+      // Custom properties on <html> are inherited by every element: rewrite
+      // them only when a value really changed.
+      setRootProperty(root, "--rdsh-safe-top", `${top}px`);
+      setRootProperty(root, "--rdsh-safe-bottom", `${bottom}px`);
+      setRootProperty(root, "--rdsh-safe-left", `${left}px`);
+      setRootProperty(root, "--rdsh-safe-right", `${right}px`);
+      setRootProperty(root, "--rdsh-native-gap-px", `${nativeGap ? Math.max(0, Math.round(screenHeight - window.innerHeight)) : 0}px`);
+    }
+
+    let safeAreaProbe = null;
+
+    function setRootProperty(root, name, value) {
+      if (root.style.getPropertyValue(name) !== value) root.style.setProperty(name, value);
     }
 
     /**
@@ -3691,12 +3816,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // can be the same string, and the old key must keep working untouched.
     const FOLDER_FRAME_KEY = "dsh-mobile-maxxing:folder-frames";
     const FRAME_COLORS = [
-      { id: "blue", label: t("frame.color.blue"), value: "#7aaaff" },
-      { id: "green", label: t("frame.color.green"), value: "#5bd6a5" },
-      { id: "amber", label: t("frame.color.amber"), value: "#ffd166" },
-      { id: "red", label: t("frame.color.red"), value: "#ff6b6b" },
-      { id: "purple", label: t("frame.color.purple"), value: "#b48cff" },
-      { id: "pink", label: t("frame.color.pink"), value: "#ff8fc7" },
+      { id: "blue", get label() { return t("frame.color.blue"); }, value: "#7aaaff" },
+      { id: "green", get label() { return t("frame.color.green"); }, value: "#5bd6a5" },
+      { id: "amber", get label() { return t("frame.color.amber"); }, value: "#ffd166" },
+      { id: "red", get label() { return t("frame.color.red"); }, value: "#ff6b6b" },
+      { id: "purple", get label() { return t("frame.color.purple"); }, value: "#b48cff" },
+      { id: "pink", get label() { return t("frame.color.pink"); }, value: "#ff8fc7" },
     ];
     function readFrameMap(key) {
       try {
@@ -3981,9 +4106,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-edit-header",
       "data-rdsh-edit-row",
       "data-rdsh-scroll",
+      "data-rdsh-cv",
       "data-rdsh-route-heading",
       "data-rdsh-route-detail",
+      "data-rdsh-route-detail-open",
       "data-rdsh-sidebar-toggle",
+      "data-rdsh-toggle-hint",
       "data-rdsh-more-row",
       "data-rdsh-settings-tab-hidden",
       "data-rdsh-settings-close",
@@ -3994,6 +4122,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       "data-rdsh-crop-overlay",
       "data-rdsh-swipe",
       "data-rdsh-auto-fired",
+      "data-rdsh-session-overflow",
+      "data-rdsh-hit44",
+      "data-rdsh-kb-room",
       "data-rdsh-terminal-dark",
     ];
 
@@ -4046,6 +4177,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       disposeWorkspaceTools();
       // #71 owns its own document listeners, timer and observer.
       disposeOlderLoader();
+      disposeRenderSkip();
       clearComposerHooks();
       clearTypingAnimations();
       removeRouteBack();
@@ -4057,6 +4189,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clearToastHooks();
       for (const layer of document.querySelectorAll("[data-rdsh-typing-layer]")) layer.remove();
       for (const attribute of PHONE_HOOKS) clearOwnedAttribute(attribute);
+      clearSessionLimit();
       clearSessionRowHooks();
       releaseSafeArea();
       releaseViewportLock();
@@ -4097,7 +4230,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         for (const row of card.querySelectorAll("li > button, button")) {
           if (row !== header) row.setAttribute("data-rdsh-edit-row", "");
         }
-        break;
       }
     }
 
@@ -4138,9 +4270,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         // its chrome mounted while closed (clipped to a zero-width column and
         // parked off-screen), and its rect stays non-zero. Only a panel that
         // never rendered is 0x0.
+        // The DOM test first: reading the rect forces a layout, and a button
+        // outside the panel is rejected either way.
+        if (button.closest(RIGHT_PANEL_ROOT) === null) continue;
         const rect = button.getBoundingClientRect();
         if (rect.width <= 0 || rect.height <= 0) continue;
-        if (button.closest(RIGHT_PANEL_ROOT) === null) continue;
         return button;
       }
       return null;
@@ -4813,7 +4947,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         for (const stale of document.querySelectorAll("[data-rdsh-rightpanel]")) {
           if (stale !== boundary) stale.removeAttribute("data-rdsh-rightpanel");
         }
-        boundary.setAttribute("data-rdsh-rightpanel", "");
+        writeOwnedAttribute(boundary, "data-rdsh-rightpanel", "");
         watchRightPanel(boundary);
         return;
       }
@@ -4829,7 +4963,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         for (const stale of document.querySelectorAll("[data-rdsh-rightpanel]")) {
           if (stale !== boundary) stale.removeAttribute("data-rdsh-rightpanel");
         }
-        boundary.setAttribute("data-rdsh-rightpanel", "");
+        writeOwnedAttribute(boundary, "data-rdsh-rightpanel", "");
         watchRightPanel(boundary);
         return;
       }
@@ -4845,7 +4979,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           for (const stale of document.querySelectorAll("[data-rdsh-rightpanel]")) {
             if (stale !== node) stale.removeAttribute("data-rdsh-rightpanel");
           }
-          node.setAttribute("data-rdsh-rightpanel", "");
+          writeOwnedAttribute(node, "data-rdsh-rightpanel", "");
           watchRightPanel(node);
           return;
         }
@@ -5232,7 +5366,18 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const controlled = document.getElementById(id);
         if (controlled !== null) return controlled;
       }
-      return document.querySelector('[class*="_menu"][role="menu"], [class*="_menu"][role="group"]');
+      if ((typeof workspacePickerOpen === "function" && workspacePickerOpen())
+        || (typeof workspacePickerPending === "boolean" && workspacePickerPending)) {
+        return null;
+      }
+      const selector = '[class*="_menu"][role="menu"], [class*="_menu"][role="group"]';
+      const candidates = typeof document.querySelectorAll === "function"
+        ? [...document.querySelectorAll(selector)]
+        : [document.querySelector(selector)].filter((node) => node !== null);
+      return candidates.find((candidate) => !candidate.hasAttribute?.("data-rdsh-workspace-menu")
+        && !candidate.hasAttribute?.("data-rdsh-folder-menu")
+        && !String(candidate.className || "").includes("rdsh-mux-queue-menu")
+        && (candidate.querySelector?.("[data-rdsh-workspace-search]") ?? null) === null) ?? null;
     }
 
     /**
@@ -5411,11 +5556,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           // longer pulls focus (or the keyboard) into the search.
           const handler = () => {
             input.disabled = false;
+            allowFocusElement = input;
             // Record the tap on the record itself: the app re-renders the
             // picker on pointerdown, and the next decorate pass would disable
             // and blur the field before its own rAF focus could run.
             if (modelSearchState !== null && modelSearchState.input === input) modelSearchState.active = true;
-            requestAnimationFrame(() => input.focus({ preventScroll: true }));
+            requestAnimationFrame(() => {
+              allowFocusElement = input;
+              input.focus({ preventScroll: true });
+            });
           };
           row.addEventListener("pointerdown", handler, true);
           modelSearchState = { input, row, handler, wasDisabled: input.disabled, active: false };
@@ -5677,7 +5826,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
       const crumb = document.querySelector('[data-rdsh-crumbs] [class*="_crumbCurrent"]');
       if (crumb === null) return;
-      crumb.setAttribute("data-rdsh-header-title", "");
+      writeOwnedAttribute(crumb, "data-rdsh-header-title", "");
       const host = document.querySelector("[data-conversation-session]");
       const id = host === null ? "" : (host.getAttribute("data-conversation-session") || "");
       const running = id !== "" && globalThis.__RDSH_MOBILE_UX_RUNNING__ instanceof Set
@@ -5725,7 +5874,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         .filter((h1) => {
           const rect = h1.getBoundingClientRect();
           if (rect.width <= 0 || rect.height <= 0) return false;
-          return h1.closest("[data-rdsh-conversation], [data-rdsh-sidebar], [data-rdsh-header], header[data-window-drag], nav, [role='dialog'], [data-shortcut-modal], article") === null;
+          return h1.closest("[data-rdsh-conversation], [data-rdsh-sidebar], [data-rdsh-header], header[data-window-drag], nav, [role='dialog']:not(:has([data-rdsh-frame])):not(:has([data-slot='sidebar'])):not(:has([data-slot='main.conversation'])):not(:has(header[data-window-drag])), [data-shortcut-modal], article") === null;
         })
         .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0];
       if (heading === undefined) {
@@ -5860,6 +6009,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function decorateRouteBack() {
       if (!phone()) {
         for (const tagged of document.querySelectorAll("[data-rdsh-route-detail]")) tagged.removeAttribute("data-rdsh-route-detail");
+        document.documentElement.removeAttribute("data-rdsh-route-detail-open");
         routeBack?.toggleAttribute("data-visible", false);
         return;
       }
@@ -5872,6 +6022,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const marker = detail.back ? "back" : "detail";
         if (container.getAttribute("data-rdsh-route-detail") !== marker) container.setAttribute("data-rdsh-route-detail", marker);
       }
+      // The drawer button hides while a detail is up. An html:has() rule made
+      // <html> re-check its whole subtree on every insertion anywhere.
+      document.documentElement.toggleAttribute("data-rdsh-route-detail-open", container !== null);
       if (routeBack !== null) routeBack.toggleAttribute("data-visible", detail !== null && detail.back);
     }
 
@@ -7052,7 +7205,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       for (const candidate of rows) {
         if (candidate !== row) candidate.remove();
       }
-      if (row !== null) row.setAttribute("data-rdsh-settings-row", "");
+      if (row !== null) writeOwnedAttribute(row, "data-rdsh-settings-row", "");
       // The account "More" row is not used on the phone.
       //
       // Never let the Settings row this function injects answer the account
@@ -7063,8 +7216,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // list (the four rows collapsed to 0x0).
       const accountSelector = ariaLabelSelector("button", "accountMenu", "Account menu");
       const isInjected = (element) => element.hasAttribute("data-rdsh-settings-row");
-      const account = [...document.querySelectorAll(accountSelector)].find((button) => !isInjected(button))
-        ?? [...document.querySelectorAll("button")].find((button) => !isInjected(button) && button.innerText.trim() === "More")
+      const account = [...document.querySelectorAll(accountSelector)].find((button) => !isInjected(button) && !nav.contains(button))
+        // innerText forces a layout per button; its text is a subset of
+        // textContent (case aside), so most buttons are ruled out without it.
+        ?? [...document.querySelectorAll("button")].find((button) => !isInjected(button) && !nav.contains(button)
+          && (button.textContent || "").toLowerCase().includes("more") && button.innerText.trim() === "More")
         ?? null;
       // Resolve the row that actually owns the account menu, and clear any
       // stale tag from an earlier pass (including a nav tagged by the bug
@@ -7072,27 +7228,32 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       let moreRow = null;
       if (account !== null) {
         const candidate = account.closest('[class*="yHnPSG_anchor"]') ?? account.parentElement ?? null;
-        // The nav itself (or an ancestor containing it) is the panel list, not
-        // the account row; tagging it hides every panel row.
-        if (candidate !== null && candidate !== nav && !candidate.contains(nav)) moreRow = candidate;
+        // The nav itself (or an ancestor/descendant of it) is the panel list, not
+        // the account row; tagging it hides panel rows.
+        if (candidate !== null && candidate !== nav && !candidate.contains(nav) && !nav.contains(candidate)) moreRow = candidate;
       }
       for (const tagged of document.querySelectorAll("[data-rdsh-more-row]")) {
         if (tagged !== moreRow) tagged.removeAttribute("data-rdsh-more-row");
       }
-      if (moreRow !== null) moreRow.setAttribute("data-rdsh-more-row", "");
+      if (moreRow !== null) writeOwnedAttribute(moreRow, "data-rdsh-more-row", "");
       const auto = nav.querySelector(ariaLabelSelector("button", "navAutomation", ["Automation tasks"]));
+      const settingsLabel = t("mux.settingsRow");
       if (row === null) {
         row = document.createElement("button");
         row.type = "button";
         row.className = "hHd-Xa_panelRow rdsh-mux-settings-row";
-        row.setAttribute("aria-label", t("mux.settingsRow"));
+        row.setAttribute("aria-label", settingsLabel);
         row.setAttribute("data-rdsh-settings-row", "");
-        row.innerHTML = `<span class="hHd-Xa_panelGlyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.1"/><path d="M6.9 1.9h2.2l.35 1.5 1.28.74 1.45-.5 1.1 1.9-1.05 1.1.1 1.48 1.05 1.1-1.1 1.9-1.45-.5-1.28.74-.35 1.5H6.9l-.35-1.5-1.28-.74-1.45.5-1.1-1.9 1.05-1.1-.1-1.48-1.05-1.1 1.1-1.9 1.45.5 1.28-.74z"/></svg></span><span class="hHd-Xa_panelTitle hHd-Xa_wide">${t("mux.settingsRow")}</span>`;
+        row.innerHTML = `<span class="hHd-Xa_panelGlyph" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.1"/><path d="M6.9 1.9h2.2l.35 1.5 1.28.74 1.45-.5 1.1 1.9-1.05 1.1.1 1.48 1.05 1.1-1.1 1.9-1.45-.5-1.28.74-.35 1.5H6.9l-.35-1.5-1.28-.74-1.45.5-1.1-1.9 1.05-1.1-.1-1.48-1.05-1.1 1.1-1.9 1.45.5 1.28-.74z"/></svg></span><span class="hHd-Xa_panelTitle hHd-Xa_wide">${settingsLabel}</span>`;
         row.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
           openSettingsViaAccountMenu();
         });
+      } else {
+        if (row.getAttribute("aria-label") !== settingsLabel) row.setAttribute("aria-label", settingsLabel);
+        const title = row.querySelector?.(".hHd-Xa_panelTitle");
+        if (title !== null && title !== undefined && title.textContent !== settingsLabel) title.textContent = settingsLabel;
       }
       // DSH 0.2.2-rc.3 wraps each stock panel button in an entry <div> (with
       // its pin control), so the button is no longer a child of the nav.
@@ -7513,14 +7674,59 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         for (const element of document.querySelectorAll("[data-rdsh-sidebar-toggle]")) {
           element.removeAttribute("data-rdsh-sidebar-toggle");
         }
+        if (typeof toggleHintHover === "boolean" && (toggleHintHover || toggleHintFocus)) {
+          toggleHintHover = false;
+          toggleHintFocus = false;
+          syncToggleHint();
+        }
         return;
       }
       const toggle = sidebarToggle();
       for (const element of document.querySelectorAll("[data-rdsh-sidebar-toggle]")) {
         if (element !== toggle) element.removeAttribute("data-rdsh-sidebar-toggle");
       }
+      if (toggle === null && typeof toggleHintHover === "boolean" && (toggleHintHover || toggleHintFocus)) {
+        toggleHintHover = false;
+        toggleHintFocus = false;
+        syncToggleHint();
+      }
       if (toggle === null) return;
-      toggle.setAttribute("data-rdsh-sidebar-toggle", "");
+      if (!toggle.hasAttribute("data-rdsh-sidebar-toggle")) toggle.setAttribute("data-rdsh-sidebar-toggle", "");
+    }
+
+    /**
+     * The sidebar toggle's own tooltip stays hidden while it is hovered or
+     * focused. Tracked here instead of an html:has(:hover, :focus) rule, which
+     * made <html> re-check its whole subtree on every insertion anywhere.
+     */
+    let toggleHintHover = false;
+    let toggleHintFocus = false;
+
+    function syncToggleHint() {
+      document.documentElement.toggleAttribute("data-rdsh-toggle-hint", phone() && (toggleHintHover || toggleHintFocus));
+    }
+
+    function onToggleHintOver(event) {
+      const over = event.target instanceof Element && event.target.closest("[data-rdsh-sidebar-toggle]") !== null;
+      if (over === toggleHintHover) return;
+      toggleHintHover = over;
+      syncToggleHint();
+    }
+
+    function onToggleHintOut(event) {
+      if (!toggleHintHover) return;
+      // Leaving the toggle subtree (or a lifted touch) ends the hover.
+      const related = event.relatedTarget;
+      if (related instanceof Element && related.closest("[data-rdsh-sidebar-toggle]") !== null) return;
+      toggleHintHover = false;
+      syncToggleHint();
+    }
+
+    function onToggleHintFocus(event) {
+      const inside = event.type === "focusin" && event.target instanceof Element && event.target.closest("[data-rdsh-sidebar-toggle]") !== null;
+      if (inside === toggleHintFocus) return;
+      toggleHintFocus = inside;
+      syncToggleHint();
     }
 
     const ADD_LABEL = t("add.label");
@@ -7597,7 +7803,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      */
     function clearComposerHooks() {
       const add = addButton();
-      if (add !== null && add.getAttribute("aria-label") === ADD_LABEL) add.setAttribute("aria-label", ADD_STOCK_LABEL);
+      const stockLabel = t("add.stock");
+      if (add !== null && (add.getAttribute("aria-label") === ADD_LABEL || Object.values(COPY).some((dict) => add.getAttribute("aria-label") === dict["add.label"]))) {
+        add.setAttribute("aria-label", stockLabel);
+      }
       for (const attribute of ["data-rdsh-model-button", "data-rdsh-add", "data-rdsh-composer-root", "data-rdsh-composer-dock", "data-rdsh-has-dock"]) {
         for (const element of document.querySelectorAll(`[${attribute}]`)) element.removeAttribute(attribute);
       }
@@ -7610,22 +7819,23 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         return;
       }
       const model = modelTrigger();
-      if (model !== null) model.setAttribute("data-rdsh-model-button", "");
+      if (model !== null) writeOwnedAttribute(model, "data-rdsh-model-button", "");
       const add = addButton();
       if (add === null) {
         document.documentElement.removeAttribute("data-rdsh-has-dock");
         return;
       }
-      add.setAttribute("data-rdsh-add", "");
+      writeOwnedAttribute(add, "data-rdsh-add", "");
       // #17: the short "attach only" label and the picker hijack below are a
       // mobile-device affordance, the same condition as `phone()`.
-      if (add.getAttribute("aria-label") !== ADD_LABEL) add.setAttribute("aria-label", ADD_LABEL);
+      const addLabel = t("add.label");
+      if (add.getAttribute("aria-label") !== addLabel) add.setAttribute("aria-label", addLabel);
       const card = add.closest('[class*="_card"]');
       if (card === null || card.parentElement === null) {
         document.documentElement.removeAttribute("data-rdsh-has-dock");
         return;
       }
-      card.parentElement.setAttribute("data-rdsh-composer-root", "");
+      writeOwnedAttribute(card.parentElement, "data-rdsh-composer-root", "");
       // The stats dock (turns / tok/s / cache hit / context %) is essential.
       // On a phone it moves out of the layout so the composer can sit as low
       // as possible, and fills the safe-area strip below the card instead of
@@ -7635,7 +7845,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (sibling === card) continue;
         const stats = sibling.querySelector(ariaContainsSelector("button", "stats", ["tok", "turns", "context"]));
         if (stats !== null) {
-          sibling.setAttribute("data-rdsh-composer-dock", "");
+          writeOwnedAttribute(sibling, "data-rdsh-composer-dock", "");
           hasDock = true;
         } else {
           sibling.removeAttribute("data-rdsh-composer-dock");
@@ -7659,13 +7869,32 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
      */
     const TAP_TARGET_ROOTS = "[data-rdsh-header], [data-sidebar-right-panel], [data-rdsh-sidebar], header, [class*='_tabStrip']";
     const TAP_TARGET_CANDIDATES = `${TAP_TARGET_ROOTS} button, [data-sidebar-right-expand]`;
-    /** Menus, dialogs and session rows keep their own geometry. */
-    const TAP_TARGET_EXCLUDE = '[role="menu"], [role="dialog"], [data-shortcut-modal], [data-row-key^="session:"]';
+    /** Menus, dialogs (excluding the DSH 0.2.2+ app shell) and session rows keep their own geometry. */
+    const TAP_TARGET_EXCLUDE = '[role="menu"], [role="dialog"]:not(:has([data-rdsh-frame])):not(:has([data-slot="sidebar"])):not(:has([data-slot="main.conversation"])):not(:has(header[data-window-drag])), [data-shortcut-modal], [data-row-key^="session:"]';
+
+    /**
+     * Buttons already measured and found outside the 24-32px band, keyed by
+     * what decides their size. Re-measuring them on every pass forced a
+     * synchronous layout per pass while a reply streamed; a periodic refresh
+     * still catches a size that changed without a class or style change.
+     */
+    let tapTargetRejects = new WeakMap();
+    let tapTargetRejectsAt = 0;
+
+    function tapTargetKey(button) {
+      return `${button.getAttribute("class") || ""}|${button.getAttribute("style") || ""}|${button.childElementCount}`;
+    }
 
     function decorateTapTargets() {
       if (!phone()) {
+        tapTargetRejects = new WeakMap();
         for (const tagged of document.querySelectorAll("[data-rdsh-hit44]")) tagged.removeAttribute("data-rdsh-hit44");
         return;
+      }
+      const now = Date.now();
+      if (now - tapTargetRejectsAt > 10000) {
+        tapTargetRejects = new WeakMap();
+        tapTargetRejectsAt = now;
       }
       const pending = [];
       for (const button of document.querySelectorAll(TAP_TARGET_CANDIDATES)) {
@@ -7675,27 +7904,63 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const labelled = String(button.getAttribute("aria-label") || "").trim() !== "";
         const iconOnly = String(button.textContent || "").trim() === "";
         if (!labelled && !iconOnly) continue;
+        const key = tapTargetKey(button);
+        if (tapTargetRejects.get(button) === key) continue;
         const rect = button.getBoundingClientRect();
         // 24-32px: the chrome's icon buttons. A smaller control (a tab's 20px
         // close affordance) would have its overlay swallow the tab it sits on.
-        if (!(rect.width >= 24 && rect.height >= 24 && rect.width <= 32 && rect.height <= 32)) continue;
+        // An unrendered (0x0) button is measured again on the next pass.
+        if (!(rect.width >= 24 && rect.height >= 24 && rect.width <= 32 && rect.height <= 32)) {
+          if (rect.width > 0 && rect.height > 0) tapTargetRejects.set(button, key);
+          continue;
+        }
         pending.push(button);
       }
       // Read every rectangle before a marker write invalidates style.
       for (const button of pending) button.setAttribute("data-rdsh-hit44", "");
     }
 
+    /**
+     * Whether each div's computed overflow-y can scroll, keyed by the class and
+     * style attributes that decide it. Reading the style of every div once a
+     * second was the largest cost of a streaming turn; a div's overflow only
+     * changes with those attributes, so it is read again only when they do.
+     */
+    let scrollerStyleCache = new WeakMap();
+    let scrollerStyleCacheAt = 0;
+
+    function overflowScrolls(element) {
+      const cls = element.getAttribute("class") || "";
+      const inline = element.getAttribute("style") || "";
+      const cached = scrollerStyleCache.get(element);
+      if (cached !== undefined && cached.cls === cls && cached.inline === inline) return cached.scrolls;
+      const overflow = getComputedStyle(element).overflowY;
+      const scrolls = overflow === "auto" || overflow === "scroll";
+      scrollerStyleCache.set(element, { cls, inline, scrolls });
+      return scrolls;
+    }
+
     function markScrollers() {
       if (!phone()) {
+        scrollerStyleCache = new WeakMap();
         clearOwnedAttribute("data-rdsh-scroll");
         return;
       }
+      // An ancestor hook can also change a div's overflow; a periodic refresh
+      // keeps that case within seconds instead of reading every div each pass.
+      const now = Date.now();
+      if (now - scrollerStyleCacheAt > 10000) {
+        scrollerStyleCache = new WeakMap();
+        scrollerStyleCacheAt = now;
+      }
       const pending = [];
+      // Check visible height before reading computed style so collapsed or
+      // content-visibility-skipped nodes pay no style lookup, and newly
+      // revealed turns still get tagged when they gain height.
       for (const element of document.querySelectorAll("[data-rdsh-frame] div")) {
         if (element.hasAttribute("data-rdsh-scroll")) continue;
-        const overflow = getComputedStyle(element).overflowY;
-        if (overflow !== "auto" && overflow !== "scroll") continue;
-        if (element.scrollHeight <= element.clientHeight + 4) continue;
+        if (element.clientHeight <= 0 || element.scrollHeight <= element.clientHeight + 4) continue;
+        if (!overflowScrolls(element)) continue;
         pending.push(element);
       }
       for (const element of pending) element.setAttribute("data-rdsh-scroll", "");
@@ -7738,7 +8003,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /** The closed marker `closeDrawer()` records when there is nothing to click. */
     function markDrawerClosed() {
-      document.documentElement.setAttribute("data-rdsh-drawer", "closed");
+      if (document.documentElement.getAttribute("data-rdsh-drawer") !== "closed") {
+        document.documentElement.setAttribute("data-rdsh-drawer", "closed");
+        if (typeof unsettleFit === "function") unsettleFit();
+      }
       if (state.drawerOpen) emit({ drawerOpen: false });
     }
 
@@ -7766,14 +8034,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         return;
       }
       if (!state.drawerOpen) emit({ drawerOpen: true });
-      document.documentElement.setAttribute("data-rdsh-drawer", "open");
+      if (document.documentElement.getAttribute("data-rdsh-drawer") !== "open") {
+        document.documentElement.setAttribute("data-rdsh-drawer", "open");
+        if (typeof unsettleFit === "function") unsettleFit();
+      }
     }
 
     /** A full-screen route closed the drawer marker; an explicit open ends it. */
     let drawerRouteClosed = false;
 
     function decorateFast() {
-      fitVisualViewport();
       // One mode decision per pass. Every tag below belongs to the mobile
       // surface; on desktop the same pass only removes leftovers, so a
       // MutationObserver firing between frames cannot re-create a hook.
@@ -7800,8 +8070,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         }
       }
       // #134: written outside the frame branch, because a route that replaces
-      // the frame is exactly when the marker went stale.
+      // the frame is exactly when the marker went stale. Run fit after updating
+      // data-rdsh-drawer so opening/closing the drawer settles viewport pin immediately.
       syncDrawerMarker(root);
+      fitVisualViewportPass();
       // #131: the chat's own session is what a reload restores; the composer
       // slot is not always mounted, so this pass is the reliable writer.
       if (onPhone) syncLastSession();
@@ -7838,6 +8110,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       decorateTapTargets();
       decorateSessionTitleTyping();
       decorateToasts();
+      decorateWorkspacePicker();
       decorateModelSearch();
       installSettingsNavArrows();
       decorateStatsDock();
@@ -7860,7 +8133,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       decorateRouteHeading();
       decorateRouteBack();
       decorateQueueDock();
-      decorateWorkspacePicker();
       decorateComposer();
       decorateHeaderActivityChips();
       decorateActivityPanel();
@@ -7917,7 +8189,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           node.setAttribute("data-rdsh-transcript", "");
         }
         const column = node.querySelector('[class*="_column"]');
-        if (column !== null) column.setAttribute("data-rdsh-transcript-column", "");
+        if (column !== null) writeOwnedAttribute(column, "data-rdsh-transcript-column", "");
         transcriptRetries = 0;
         return;
       }
@@ -7932,9 +8204,147 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
       for (const item of document.querySelectorAll('[data-chat-flow-kind="user"]')) {
         const stack = item.querySelector('[class*="userStack"]');
-        if (stack !== null) stack.setAttribute("data-rdsh-user-stack", "");
+        if (stack !== null) writeOwnedAttribute(stack, "data-rdsh-user-stack", "");
         const bubble = item.querySelector('[class*="_bubble"]');
-        if (bubble !== null) bubble.setAttribute("data-rdsh-user-bubble", "");
+        if (bubble !== null) writeOwnedAttribute(bubble, "data-rdsh-user-bubble", "");
+      }
+    }
+
+    // ---------------------------------------------------------------------
+    // Off-screen turns skip rendering
+    // ---------------------------------------------------------------------
+    /**
+     * Turns that may skip style, layout and paint while off screen.
+     *
+     * Upstream restyles the whole transcript on every streamed chunk (its
+     * column rules use :has()), so a long session paid for thousands of
+     * elements the user could not see. `content-visibility: auto` lets the
+     * browser skip the turns outside the viewport. turn-tail is left out: its
+     * action row reaches 6px past the turn and paint containment would clip
+     * the first button's pressed background.
+     */
+    const RENDER_SKIP_ITEMS = '[data-chat-flow-kind="user"], [data-chat-flow-kind="turn-process"], [data-chat-flow-kind="assistant-step"]';
+    /** Turns already rendered once at the current width (their size is remembered). */
+    let renderSkipSeen = new WeakSet();
+    let renderSkipObserver = null;
+    let renderSkipProbe = null;
+    let renderSkipWidth = -1;
+    let renderSkipEm = -1;
+    let renderSkipRetry = 0;
+
+    /**
+     * Forget every skip tag so each turn renders once more.
+     *
+     * A skipped turn keeps the height it last had. Upstream turns scroll
+     * anchoring off and keeps its own scroll position, so a stale height would
+     * move the conversation when the turn renders again. A width or font change
+     * makes every remembered height stale: render them all once, then skip.
+     */
+    function resetRenderSkip() {
+      renderSkipSeen = new WeakSet();
+      for (const item of document.querySelectorAll("[data-rdsh-cv]")) item.removeAttribute("data-rdsh-cv");
+    }
+
+    function watchRenderSkipGeometry(scroller) {
+      if (typeof ResizeObserver !== "function") return;
+      if (renderSkipObserver === null) {
+        renderSkipObserver = new ResizeObserver((entries) => {
+          let changed = false;
+          for (const entry of entries) {
+            const width = Math.round(entry.contentRect.width);
+            if (width <= 0) continue;
+            if (entry.target === renderSkipProbe) {
+              if (renderSkipEm !== -1 && width !== renderSkipEm) changed = true;
+              renderSkipEm = width;
+            } else {
+              if (renderSkipWidth !== -1 && width !== renderSkipWidth) changed = true;
+              renderSkipWidth = width;
+            }
+          }
+          if (changed) {
+            resetRenderSkip();
+            lastSlowAt = 0;
+            scheduleDecorate({ fast: false });
+          }
+        });
+        // Watch both content and code font CSS variables directly without polling.
+        renderSkipProbe = document.createElement("div");
+        renderSkipProbe.setAttribute("data-rdsh-cv-probe", "");
+        renderSkipProbe.setAttribute("aria-hidden", "true");
+        renderSkipProbe.style.cssText = "position:absolute;left:0;top:0;width:calc(var(--dsh-content-font-size, 14px) * 10 + var(--dsh-code-font-size, 11px) * 10);height:0;visibility:hidden;pointer-events:none;contain:strict";
+        document.body.append(renderSkipProbe);
+        renderSkipObserver.observe(renderSkipProbe);
+      }
+      if (renderSkipObserver.scroller !== scroller) {
+        if (renderSkipObserver.scroller) renderSkipObserver.unobserve(renderSkipObserver.scroller);
+        renderSkipObserver.scroller = scroller;
+        renderSkipWidth = -1;
+        renderSkipObserver.observe(scroller);
+      }
+    }
+
+    function disposeRenderSkip() {
+      renderSkipObserver?.disconnect();
+      renderSkipObserver = null;
+      renderSkipProbe?.remove();
+      renderSkipProbe = null;
+      renderSkipWidth = -1;
+      renderSkipEm = -1;
+      clearTimeout(renderSkipRetry);
+      renderSkipRetry = 0;
+      resetRenderSkip();
+    }
+
+    /**
+     * Tag the finished turns that may skip rendering.
+     *
+     * A turn is tagged on the pass after the one that first saw it, so it has
+     * been laid out once and `contain-intrinsic-size: auto` remembers its real
+     * height. The current turn (the last user message and everything after
+     * it) is never tagged: it is still changing, and a change made while it
+     * was skipped would only land, as a jump, when the user scrolls back.
+     */
+    function decorateRenderSkip() {
+      if (!phone()) {
+        disposeRenderSkip();
+        return;
+      }
+      const scrollers = [...document.querySelectorAll('[class*="scrollBody"]')];
+      const scroller = scrollers.find((node) => node.clientHeight > 0) ?? scrollers[0] ?? null;
+      if (scroller === null) return;
+      watchRenderSkipGeometry(scroller);
+      const items = scroller.querySelectorAll(RENDER_SKIP_ITEMS);
+      let lastUser = -1;
+      for (let index = items.length - 1; index >= 0; index -= 1) {
+        if (items[index].getAttribute("data-chat-flow-kind") === "user") {
+          lastUser = index;
+          break;
+        }
+      }
+      let waiting = false;
+      for (let index = 0; index < items.length; index += 1) {
+        const item = items[index];
+        const current = lastUser === -1 || index >= lastUser;
+        if (current) {
+          if (item.hasAttribute("data-rdsh-cv")) item.removeAttribute("data-rdsh-cv");
+          renderSkipSeen.delete(item);
+          continue;
+        }
+        if (item.hasAttribute("data-rdsh-cv")) continue;
+        if (renderSkipSeen.has(item)) item.setAttribute("data-rdsh-cv", "");
+        else {
+          renderSkipSeen.add(item);
+          waiting = true;
+        }
+      }
+      // A quiet page may not mutate again: come back once the new turns have
+      // been laid out, so they are tagged without waiting for the next change.
+      if (waiting && renderSkipRetry === 0) {
+        renderSkipRetry = setTimeout(() => {
+          renderSkipRetry = 0;
+          lastSlowAt = 0;
+          scheduleDecorate({ fast: false });
+        }, 250);
       }
     }
 
@@ -7943,11 +8353,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       decorateRightPanel();
       decorateTranscript();
       decorateUserBubbles();
+      decorateRenderSkip();
       markScrollers();
       // After decorateRightPanel so a just-tagged panel exists, and on the
       // slow pass so a click cannot be issued on every mutation.
       ensureRightPanelFits();
     }
+
+    /** The trailing slow pass, so the last change of a burst is never skipped. */
+    let slowTimer = 0;
 
     function decorate(runFast = true) {
       if (runFast) decorateFast();
@@ -7955,6 +8369,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (now - lastSlowAt > 900) {
         lastSlowAt = now;
         decorateSlow();
+      } else if (slowTimer === 0) {
+        // A transcript that lands inside the throttle window used to wait for
+        // an unrelated mutation before its slow-pass hooks were written.
+        slowTimer = setTimeout(() => {
+          slowTimer = 0;
+          scheduleDecorate({ fast: false });
+        }, 910 - (now - lastSlowAt));
       }
     }
 
@@ -7972,13 +8393,26 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     // Plain streaming text cannot introduce a new mobile control. Structural,
     // header, input and non-chat mutations still run the full fast pass.
+    //
+    // Inside a message's rendered Markdown the same holds for markup: a
+    // streamed reply grows by paragraphs, list items, table cells and the
+    // highlighter's token spans, none of which this module decorates. Such a
+    // mutation skips the fast pass unless it adds or removes something a
+    // decorator could act on (a control, a link, media, a labelled or
+    // role-bearing node, a slot). Each skipped pass used to re-query the whole
+    // document about forty times while a reply streamed.
     function needsFastPass(record) {
       if (record?.type !== "childList") return true;
       const target = record.target;
-      if (!target || !["P", "PRE", "CODE"].includes(target.tagName)) return true;
-      if (!target.closest?.("[data-rdsh-center-col]")) return true;
+      if (!target || typeof target.closest !== "function") return true;
+      if (!target.closest("[data-rdsh-center-col]")) return true;
       if (target.closest("button, a, input, textarea, [contenteditable=true], [data-rdsh-header]")) return true;
-      return [...(record.addedNodes || []), ...(record.removedNodes || [])].some(node => node.nodeType !== 3);
+      const nodes = [...(record.addedNodes || []), ...(record.removedNodes || [])];
+      if (["P", "PRE", "CODE"].includes(target.tagName) && nodes.every((node) => node.nodeType === 3)) return false;
+      if (target.closest('[data-chat-flow-kind] [class*="_markdown"]') === null) return true;
+      const control = 'button, a, input, textarea, select, img, video, audio, iframe, canvas, details, dialog, [role], [contenteditable], [tabindex], [aria-label], [aria-haspopup], [data-slot]';
+      return nodes.some((node) => node.nodeType === 1
+        && (typeof node.matches !== "function" || node.matches(control) || node.querySelector(control) !== null));
     }
 
     function scheduleDecorate(options) {
@@ -8055,6 +8489,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /** Forget the page tags and the button (desktop, or no drawer). */
     function clearSessionLimit() {
+      sessionLimit = SESSION_PAGE_SIZE;
+      sessionLimitOpen = false;
       for (const row of document.querySelectorAll("[data-rdsh-session-overflow]")) row.removeAttribute("data-rdsh-session-overflow");
       document.querySelector("[data-rdsh-session-more]")?.remove();
     }
@@ -8223,10 +8659,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (fab === null) return;
       const badge = fab.querySelector(".rdsh-mux-fab-badge");
       if (badge !== null) {
-        badge.textContent = notificationTotal === 0 ? "" : notificationTotal > 99 ? "99+" : String(notificationTotal);
+        const text = notificationTotal === 0 ? "" : notificationTotal > 99 ? "99+" : String(notificationTotal);
+        // Same text still replaces the text node and wakes the document observer.
+        if (badge.textContent !== text) badge.textContent = text;
         badge.toggleAttribute("data-visible", notificationTotal > 0);
       }
-      fab.setAttribute("aria-label", notificationTotal > 0
+      writeOwnedAttribute(fab, "aria-label", notificationTotal > 0
         ? t("mux.fab.openWithCount", { count: notificationTotal })
         : t("mux.fab.open"));
     }
@@ -8279,7 +8717,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           }
         }
         globalThis.__RDSH_MOBILE_UX_RUNNING__ = runningIds;
-        document.documentElement.setAttribute("data-rdsh-running-subagents", String(runningSubagents));
+        writeOwnedAttribute(document.documentElement, "data-rdsh-running-subagents", String(runningSubagents));
         document.documentElement.toggleAttribute("data-rdsh-badge-hook", hasHook);
         document.documentElement.toggleAttribute("data-rdsh-sessions-hook", hasSessions);
         globalThis.__RDSH_MOBILE_UX_BADGE__ = { total, main, subagents: Math.max(0, total - main), runningSubagents, mainIds: mainIds === null ? null : [...mainIds] };
@@ -8562,9 +9000,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       }
     }
 
-    function queueRowAction(row, pattern) {
-      return [...row.querySelectorAll("button[aria-label]")]
-        .find((button) => pattern.test(button.getAttribute("aria-label") || "")) ?? null;
+    function queueRowAction(row, labels, index) {
+      const buttons = [...row.querySelectorAll("button[aria-label]")]
+        .filter((button) => !button.hasAttribute("data-rdsh-queue-preview"));
+      const normalized = labels.map((label) => String(label).toLowerCase());
+      const byLabel = buttons.find((button) => {
+        const label = (button.getAttribute("aria-label") || "").trim().toLowerCase();
+        return label !== "" && normalized.some((candidate) => label === candidate || label.startsWith(candidate));
+      });
+      if (byLabel !== undefined) return byLabel;
+      return buttons.length >= 3 && index >= 0 && index < buttons.length ? buttons[index] : null;
     }
 
     function queueMenuAt(row) {
@@ -8575,12 +9020,12 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       menu.className = "rdsh-mux-queue-menu";
       menu.setAttribute("role", "menu");
       const items = [
-        { label: "Edit", pattern: /^Edit queued message$/i },
-        { label: "Send now", pattern: /^Steer queued message$/i },
-        { label: "Remove", pattern: /^Remove queued message$/i },
+        { label: t("queue.edit"), labels: probeValues("queueEdit", ["Edit queued message"]), index: 0 },
+        { label: t("queue.sendNow"), labels: probeValues("queueSteer", ["Steer queued message"]), index: 1 },
+        { label: t("queue.remove"), labels: probeValues("queueRemove", ["Remove queued message"]), index: 2 },
       ];
       for (const item of items) {
-        const action = queueRowAction(row, item.pattern);
+        const action = queueRowAction(row, item.labels, item.index);
         const button = document.createElement("button");
         button.type = "button";
         button.setAttribute("role", "menuitem");
@@ -8597,7 +9042,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const cancel = document.createElement("button");
       cancel.type = "button";
       cancel.setAttribute("role", "menuitem");
-      cancel.textContent = "Cancel";
+      cancel.textContent = t("queue.cancel");
       cancel.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -8630,7 +9075,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const panel = document.createElement("div");
       panel.className = "rdsh-mux-queue-preview";
       panel.setAttribute("role", "dialog");
-      panel.setAttribute("aria-label", "Queued message preview");
+      panel.setAttribute("aria-label", t("queue.previewAria"));
       panel.setAttribute("data-rdsh-queue-for", preview.getAttribute("data-rdsh-queue-for"));
       panel.textContent = text;
       document.body.append(panel);
@@ -9006,7 +9451,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       workspacePickerState = { menu, viewport, wrappers, input, search, empty, keydown };
       workspacePickerPending = false;
       apply();
-      requestAnimationFrame(() => input.focus({ preventScroll: true }));
+      requestAnimationFrame(() => {
+        allowFocusElement = input;
+        input.focus({ preventScroll: true });
+      });
     }
 
     /**
@@ -9149,6 +9597,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const api = globalThis.CSS;
       if (api === null || typeof api !== "object" || api.highlights === undefined) return;
       if (typeof api.highlights.delete === "function") api.highlights.delete(FILES_HIGHLIGHT);
+      syncOnDemandStyle("files-highlight", "");
     }
 
     /**
@@ -9222,6 +9671,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const api = globalThis.CSS;
         if (api !== null && typeof api === "object" && api.highlights !== undefined && typeof api.highlights.set === "function") {
           const highlight = new globalThis.Highlight(...ranges);
+          syncOnDemandStyle("files-highlight", CSS_FILES_HIGHLIGHT);
           api.highlights.set(FILES_HIGHLIGHT, highlight);
         }
       }
@@ -9253,6 +9703,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       state.input.value = "";
       runFilesSearch("");
       syncFilesSearchClear();
+      allowFocusElement = state.input;
       state.input.focus({ preventScroll: true });
     }
 
@@ -9311,6 +9762,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         filesSearch.search.remove();
         filesSearch = null;
       }
+      for (const hidden of root.querySelectorAll("[data-rdsh-files-hidden]")) hidden.removeAttribute("data-rdsh-files-hidden");
       clearFilesHighlight();
       const search = document.createElement("div");
       search.className = "rdsh-mux-files-search";
@@ -9951,7 +10403,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (typeof fetch !== "function") throw new Error("download is unavailable");
       const rpcId = globalThis.crypto?.randomUUID?.()
         ?? `rdsh-presented-${Date.now()}-${offset}`;
-      const response = await fetch("/api/workspaceFiles/readBytes", {
+      const readUrl = typeof appUrl === "function" ? appUrl("api/workspaceFiles/readBytes") : "/api/workspaceFiles/readBytes";
+      const response = await fetch(readUrl, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -10032,7 +10485,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /** The host's streamed download for this file (see lib/mobile-ux.js). */
     function presentedDownloadUrl(info) {
-      return `/api/rdsh-mobile-ux/download?sessionId=${encodeURIComponent(info.sessionId)}&path=${encodeURIComponent(info.path)}`;
+      const relative = `api/rdsh-mobile-ux/download?sessionId=${encodeURIComponent(info.sessionId)}&path=${encodeURIComponent(info.path)}`;
+      return typeof appUrl === "function" ? appUrl(relative) : `/${relative}`;
     }
 
     /**
@@ -11049,7 +11503,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         return;
       }
       // Modal/popover dismissal must not also navigate the underlying screen.
-      const overlays = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [data-shortcut-modal]')]
+      // Exclude the DSH 0.2.2+ app shell itself (which also has role="dialog").
+      const overlays = [...document.querySelectorAll('[role="dialog"]:not(:has([data-rdsh-frame])):not(:has([data-slot="sidebar"])):not(:has([data-slot="main.conversation"])):not(:has(header[data-window-drag])), [role="alertdialog"], [role="menu"], [role="listbox"], [data-shortcut-modal]')]
         .filter(routeLaidOut);
       const overlay = overlays.at(-1);
       if (overlay !== undefined) {
@@ -11090,19 +11545,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
             mobileToast(t("mux.back.unavailable"));
             return;
           }
-          wantedSession = "";
-          wantedUntil = 0;
+          if (typeof clearWantedSession === "function") clearWantedSession();
+          else { wantedSession = ""; wantedUntil = 0; }
           // The normal Workspace flow reuses its blank session, preserving
           // the directory and any existing draft without clearing the source.
           // Its service reports creation failures and keeps the old selection.
           void Promise.resolve(workspace.openWorkspace(workspaceId)).catch(() => {});
         } else if (panelId != null && (!sessionId || blank) && typeof layout?.selectPanel === "function") {
-          wantedSession = "";
-          wantedUntil = 0;
+          if (typeof clearWantedSession === "function") clearWantedSession();
+          else { wantedSession = ""; wantedUntil = 0; }
           layout.selectPanel(null);
         } else if (typeof workspace?.clearMain === "function") {
-          wantedSession = "";
-          wantedUntil = 0;
+          if (typeof clearWantedSession === "function") clearWantedSession();
+          else { wantedSession = ""; wantedUntil = 0; }
           workspace.clearMain();
         } else {
           mobileToast(t("mux.back.unavailable"));
@@ -11175,6 +11630,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // gesture pulls the preview/right sidebar (the app's own "Open right
     // sidebar"). While the preview is open the left-to-right swipe closes it.
     let edgeSwipe = null;
+    let edgeSuppressedTap = null;
     /** How far from the left edge the OS Back gesture is claimed. */
     const EDGE_SUPPRESS_PX = 28;
 
@@ -11192,15 +11648,21 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function onEdgeSwipeStart(event) {
       edgeSwipe = null;
+      edgeSuppressedTap = null;
       if (!phone() || event.touches.length !== 1) return;
       const first = event.touches[0];
       // iOS Safari and the installed PWA walk their history on a swipe that
       // starts at the screen edge, which leaves the current screen (the
       // "swiping right goes back" report). A page that cancels that touch
       // keeps the gesture, so the drawer swipe below runs instead of a
-      // navigation. Every screen gets the same treatment: the listener is
-      // registered non-passive (see the boot block).
+      // navigation. When no drag follows, recover the suppressed tap on touchend.
       if (first.clientX <= EDGE_SUPPRESS_PX && event.cancelable) event.preventDefault();
+      if (first.clientX <= EDGE_SUPPRESS_PX && event.cancelable) {
+        const tapTarget = event.target && typeof event.target.closest === "function" ? event.target : null;
+        if (tapTarget !== null && tapTarget.closest(".rdsh-mux-fab") === null) {
+          edgeSuppressedTap = { target: tapTarget, x: first.clientX, y: first.clientY, at: Date.now() };
+        }
+      }
       if (document.querySelector("[data-rdsh-lightbox], [data-rdsh-crop-overlay], [data-shortcut-modal=settings]") !== null) return;
       const touch = event.touches[0];
       const target = event.target;
@@ -11282,7 +11744,16 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       edgeSwipe = { x: touch.clientX, y: touch.clientY, fromRight };
     }
     function onEdgeSwipeMove(event) {
-      if (event.touches.length !== 1) { edgeSwipe = null; return; }
+      if (event.touches.length !== 1) {
+        edgeSwipe = null;
+        edgeSuppressedTap = null;
+        return;
+      }
+      const touch = event.touches[0];
+      if (edgeSuppressedTap !== null && touch !== undefined
+        && Math.hypot(touch.clientX - edgeSuppressedTap.x, touch.clientY - edgeSuppressedTap.y) > 10) {
+        edgeSuppressedTap = null;
+      }
       if (edgeSwipe === null) return;
       // The mode is fixed, but a gesture can outlive the layout it started
       // in; a desktop page must not continue it.
@@ -11290,7 +11761,6 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         edgeSwipe = null;
         return;
       }
-      const touch = event.touches[0];
       const dx = touch.clientX - edgeSwipe.x;
       const dy = touch.clientY - edgeSwipe.y;
       // A vertical finger belongs to the list under it: drop the gesture and
@@ -11354,6 +11824,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       cancelQueuePress();
       edgeSwipe = null;
       touchStart = null;
+      edgeSuppressedTap = null;
       terminalDrag = null;
       cancelTabHold();
       releaseTabStrip(tabCandidate);
@@ -11363,12 +11834,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       clearTimeout(tabReplayTimer);
       cancelLongPress();
     }
-    function onEdgeSwipeEnd() {
+    function onEdgeSwipeEnd(event) {
+      const tap = edgeSuppressedTap;
+      edgeSuppressedTap = null;
       // The gesture itself has already run on the move that crossed the
       // threshold; the end only drops the state (#141 removed the iOS Back
       // branch, so nothing is deferred to touchend any more).
       edgeSwipe = null;
       endTerminalDrag();
+      if (tap === null || event?.type !== "touchend" || !phone() || Date.now() - tap.at > 600) return;
+      if (tap.target.isConnected === false) return;
+      const control = tap.target.closest('button, a, summary, label, input, select, textarea, [role="button"], [role="tab"], [role="menuitem"], [tabindex]');
+      if (control === null || control === undefined || control.disabled === true) return;
+      if (typeof control.click === "function") control.click();
     }
 
     // ---------------------------------------------------------------------
@@ -11420,6 +11898,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function onKeyDownCapture(event) {
+      if (phone() && event.key === "Tab") {
+        tabFocusPending = true;
+        queueMicrotask(() => { tabFocusPending = false; });
+        return;
+      }
       // The session-less composer opens the picker on Enter/Space without a
       // click, so arm the same pre-mount reservation here (#39).
       armWorkspacePickerFromKey(event);
@@ -11804,7 +12287,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (event.ctrlKey === true || event.altKey === true || event.metaKey === true) return;
       const byte = terminalControlByte(event.key);
       if (byte === null) {
-        if (typeof event.key === "string" && event.key.length > 1) setSpecialKeyControl(state, false);
+        const keepControl = event.key === "Shift" || event.key === "Alt" || event.key === "Meta"
+          || event.key === "Control" || event.key === "CapsLock" || event.key === "Unidentified";
+        if (!keepControl && typeof event.key === "string" && event.key.length > 1) setSpecialKeyControl(state, false);
         return;
       }
       if (event.cancelable) event.preventDefault();
@@ -12583,6 +13068,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // closes just as it does for a tapped session row. Match by label, not
       // by hashed class; a session row never carries one of these buttons.
       if (phone() && isNewSessionButton(target)) {
+        clearWantedSession();
         setTimeout(closeDrawer, 0);
         return;
       }
@@ -12592,6 +13078,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // open drawer (and the FAB comes back). A desktop sidebar is never
       // touched: this branch is mode-gated.
       if (phone() && isPanelRouteButton(target)) {
+        clearWantedSession();
         setTimeout(closeDrawer, 0);
         return;
       }
@@ -12608,6 +13095,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           return;
         }
         if (controlInsideRow(target)) return;
+        clearWantedSession();
         if (tapCandidate !== null) tapCandidate.fired = true;
         // Close after the row's own handler has opened the session.
         setTimeout(closeDrawer, 0);
@@ -12628,6 +13116,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // Focus: opening a session must not steal the composer
     // ---------------------------------------------------------------------
     let allowFocusElement = null;
+    let tabFocusPending = false;
 
     function textBoxOf(element) {
       if (!(element instanceof Element)) return null;
@@ -12643,6 +13132,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     function onFocusPointer(event) {
       if (!phone()) return;
+      tabFocusPending = false;
       const terminal = event.target?.closest?.(".xterm");
       const field = textBoxOf(event.target) ?? terminal?.querySelector("textarea.xterm-helper-textarea") ?? null;
       allowFocusElement = field;
@@ -12692,7 +13182,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function modalOwnedField(field) {
       const dialog = field.closest('[role="dialog"]');
       if (dialog === null) return false;
-      return dialog.closest('[role="dialog"]') !== null;
+      const outer = dialog.parentElement ? dialog.parentElement.closest('[role="dialog"]') : null;
+      if (outer !== null) return true;
+      return typeof dialog.querySelector === "function"
+        && dialog.querySelector('[data-rdsh-frame], [data-slot="sidebar"], [data-slot="main.conversation"], header[data-window-drag]') === null;
     }
 
     function drawerOwnedField(field) {
@@ -12707,6 +13200,11 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (!phone()) return;
       const field = textBoxOf(event.target);
       if (field === null) return;
+      if (tabFocusPending) {
+        allowFocusElement = field;
+        tabFocusPending = false;
+        return;
+      }
       // Only a field deliberately chosen by pointer or Tab may keep focus.
       // App/session opening and programmatic refocusing do not open a keyboard.
       if (field === allowFocusElement) return;
@@ -12809,8 +13307,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     }
 
     function onKeyDown(event) {
-      if (event.key === "Tab") {
-        allowFocusElement = textBoxOf(event.target);
+      if (phone() && event.key === "Tab") {
+        tabFocusPending = true;
+        queueMicrotask(() => { tabFocusPending = false; });
         return;
       }
       if (event.key === "Escape") {
@@ -13384,27 +13883,30 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       box.addEventListener("pointermove", onMove);
       box.addEventListener("pointerup", () => { move = null; });
       box.addEventListener("pointercancel", () => { move = null; });
+      let saving = false;
       save.addEventListener("click", async () => {
-        if (state.w <= 0 || state.h <= 0) return;
-        const scaleX = image.naturalWidth / image.clientWidth;
-        const scaleY = image.naturalHeight / image.clientHeight;
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(state.w * scaleX));
-        canvas.height = Math.max(1, Math.round(state.h * scaleY));
-        const context = canvas.getContext("2d");
-        context.drawImage(image, state.x * scaleX, state.y * scaleY, state.w * scaleX, state.h * scaleY, 0, 0, canvas.width, canvas.height);
-        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-        if (blob === null) return;
-        syncNorm();
-        if (record !== null) {
-          record.rotation = rotation;
-          record.cropNorm = cropNorm === null ? null : { ...cropNorm };
-        }
-        const file = new File([blob], `crop-${Date.now()}.png`, { type: "image/png" });
-        const closePreview = () => {
-          dialog.querySelector('button[class*="_close_"]')?.click();
-        };
+        if (saving || state.w <= 0 || state.h <= 0) return;
+        saving = true;
+        save.disabled = true;
         try {
+          const scaleX = image.naturalWidth / image.clientWidth;
+          const scaleY = image.naturalHeight / image.clientHeight;
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(state.w * scaleX));
+          canvas.height = Math.max(1, Math.round(state.h * scaleY));
+          const context = canvas.getContext("2d");
+          context.drawImage(image, state.x * scaleX, state.y * scaleY, state.w * scaleX, state.h * scaleY, 0, 0, canvas.width, canvas.height);
+          const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+          if (blob === null) return;
+          syncNorm();
+          if (record !== null) {
+            record.rotation = rotation;
+            record.cropNorm = cropNorm === null ? null : { ...cropNorm };
+          }
+          const file = new File([blob], `crop-${Date.now()}.png`, { type: "image/png" });
+          const closePreview = () => {
+            dialog.querySelector('button[class*="_close_"]')?.click();
+          };
           if (record !== null) {
             if (record.originalData === null) {
               try {
@@ -13451,6 +13953,9 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           closePreview();
         } catch {
           mobileToast(t("crop.addFailed"));
+        } finally {
+          saving = false;
+          save.disabled = false;
         }
       });
       document.body.append(overlay);
@@ -13641,7 +14146,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         if (generation !== pushEnableGeneration) return;
         pushEnableWork = (async () => {
           setPushEnabled(true);
-          const registration = await navigator.serviceWorker.ready;
+          if (!("serviceWorker" in navigator) || navigator.serviceWorker == null) throw new Error(t("notify.unavailable"));
+          let registration = await navigator.serviceWorker.getRegistration?.();
+          if (registration === null || registration === undefined) {
+            registration = await Promise.race([
+              navigator.serviceWorker.ready,
+              new Promise((resolve) => setTimeout(() => resolve(null), 4000)),
+            ]);
+          }
+          if (registration === null || registration === undefined) throw new Error(t("notify.unavailable"));
           const response = await fetch(`${PUSH_API}/vapid`, { cache: "no-store" });
           if (!response.ok) throw new Error(t("notify.unavailable"));
           const { publicKey } = await response.json();
@@ -13696,6 +14209,10 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       setPushEnabled(false);
       if (pushEnableWork !== null) { try { await pushEnableWork; } catch { /* still remove the browser subscription */ } }
       if (pushSyncTask !== null) await pushSyncTask;
+      if (!("serviceWorker" in navigator) || navigator.serviceWorker == null) {
+        await refreshNotificationStatus();
+        return;
+      }
       const registration = await navigator.serviceWorker.getRegistration();
       const subscription = registration === null || registration === undefined ? null : await registration.pushManager.getSubscription();
       if (subscription !== null && subscription !== undefined) {
@@ -13831,15 +14348,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
     /** Preset notification sounds, synthesised — no audio files to ship. */
     const SOUND_PRESETS = {
-      none: { label: t("mux.sound.none"), notes: [[0, 0, 0]] },
+      none: { get label() { return t("mux.sound.none"); }, notes: [[0, 0, 0]] },
       // A short two-note rise: the "something finished" shape.
-      chime: { label: t("mux.sound.chime"), notes: [[659.25, 0.22, 0], [783.99, 0.30, 0.12], [987.77, 0.42, 0.24]] },
+      chime: { get label() { return t("mux.sound.chime"); }, notes: [[659.25, 0.22, 0], [783.99, 0.30, 0.12], [987.77, 0.42, 0.24]] },
       // One soft blip, for questions that should not startle.
-      pop: { label: t("mux.sound.pop"), notes: [[660, 0.05, 0.35]] },
+      pop: { get label() { return t("mux.sound.pop"); }, notes: [[660, 0.05, 0.35]] },
       // Three descending notes: distinct without being loud.
-      drop: { label: t("mux.sound.drop"), notes: [[1175, 0.07, 0.34], [880, 0.07, 0.1], [660, 0.12, 0.1]] },
+      drop: { get label() { return t("mux.sound.drop"); }, notes: [[1175, 0.07, 0.34], [880, 0.07, 0.1], [660, 0.12, 0.1]] },
       // A quiet double tap for "still working".
-      tick: { label: t("mux.sound.tick"), notes: [[1500, 0.03, 0.42], [1500, 0.03, 0.1]] },
+      tick: { get label() { return t("mux.sound.tick"); }, notes: [[1500, 0.03, 0.42], [1500, 0.03, 0.1]] },
     };
 
     const SOUND_KEY = "rdsh-mobile-ux:notify-sound";
@@ -14263,7 +14780,14 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     /** The session a notification asked for, until the DOM shows it. */
     let wantedSession = "";
     let wantedUntil = 0;
+    let attempts = 0;
     let sessionOpener = null;
+
+    function clearWantedSession() {
+      wantedSession = "";
+      wantedUntil = 0;
+      attempts = 0;
+    }
 
     /**
      * Ask for one session to be opened.
@@ -14280,6 +14804,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       if (sessionId === currentSessionId) return;
       wantedSession = sessionId;
       wantedUntil = Date.now() + SESSION_CONFIRM_MS;
+      attempts = 0;
       sessionOpener?.();
     }
 
@@ -14394,7 +14919,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         const id = wantedSession;
         const state = catalogState(id);
         if (state === "missing") {
-          wantedSession = "";
+          clearWantedSession();
           return;
         }
         if (state === "loading") {
@@ -14416,16 +14941,15 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       // A boot restore is re-asserted, not repeated forever: 1.5s apart, only
       // while the page is visible, and never more than ten times. The old 500ms
       // loop hammered a session whose open was already in flight.
-      let attempts = 0;
       const timer = setInterval(() => {
         if (wantedSession === "") return;
         if (document.visibilityState !== "visible") return;
         if (shownSessionId() === wantedSession) {
-          wantedSession = "";
+          clearWantedSession();
           return;
         }
         if (Date.now() > wantedUntil || attempts >= 10) {
-          wantedSession = "";
+          clearWantedSession();
           return;
         }
         attempts += 1;
@@ -14852,12 +15376,19 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     function LocalLanguageSection() {
       const display = useStore().localDisplay;
       const available = display.available?.language !== false;
+      const reason = String(display.reason?.language ?? "");
+      const reasonKey = {
+        "locale-missing": "localDisplay.reason.localeMissing",
+        "locale-shape": "localDisplay.reason.localeShape",
+        "no-locales": "localDisplay.reason.noLocales",
+      }[reason];
+      const reasonNote = reasonKey !== undefined ? t(reasonKey) : reason !== "" ? reason : t("localDisplay.reason.localeMissing");
       return h("div", { className: "rdsh-mux-card" },
         h("label", { className: "rdsh-mux-slider" }, h("span", null, t("localDisplay.language")),
           h("select", { className: "rdsh-mux-select", value: display.language, disabled: !available, onChange: (event) => setLocalDisplayLanguage(event.target.value) },
             h("option", { value: "" }, t("localDisplay.language.system")),
             (display.languages ?? []).map((entry) => h("option", { key: entry.id, value: entry.id }, entry.label)))),
-        !available ? h("p", { className: "rdsh-mux-note" }, t("localDisplay.reason.localeMissing")) : null);
+        !available ? h("p", { className: "rdsh-mux-note" }, reasonNote) : null);
     }
 
     function LocalDisplaySettingsSection() {
@@ -14932,7 +15463,8 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           h("p", { className: "rdsh-mux-note" }, t("localDisplay.terminalDark.note")),
           h("label", { className: "rdsh-mux-slider" },
             h("span", null, t("motion.title")),
-            h("select", { className: "rdsh-mux-select", value: effectiveMotion(s.motion, motionQuery?.matches === true), onChange: event => writeMotion(event.target.value) },
+            h("select", { className: "rdsh-mux-select", value: s.motion ?? "", onChange: event => writeMotion(event.target.value) },
+              h("option", { value: "" }, t("motion.system")),
               ...["standard", "reduced", "off"].map(value => h("option", { key: value, value }, t(`motion.${value}`))))),
           h("p", { className: "rdsh-mux-note" }, t("motion.note")),
         ),
@@ -14961,7 +15493,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
         let lastTps = 0;
         const update = async () => {
           try {
-            const response = await fetch(`/api/rdsh-mobile-ux/live-speed?sessionId=${encodeURIComponent(sessionId)}`, { cache: "no-store" });
+            const response = await fetch(appUrl(`api/rdsh-mobile-ux/live-speed?sessionId=${encodeURIComponent(sessionId)}`), { cache: "no-store" });
             if (!response.ok) {
               lastTps = 0;
               if (active) setSpeed(null);
@@ -15260,10 +15792,13 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
 
 `;
 
-    const CSS_PHONE = `
-html[data-rdsh-motion] { --rdsh-anim-duration: .15s; --rdsh-anim-repeat: infinite; }
-html[data-rdsh-motion="reduced"] { --rdsh-anim-duration: .08s; --rdsh-anim-repeat: 1; }
-html[data-rdsh-motion="off"] { --rdsh-anim-duration: .001ms; --rdsh-anim-repeat: 1; }
+    /**
+     * The reduced/off motion overrides. Every rule here has a universal
+     * subject, so every element of a restyle tested it even on the standard
+     * setting, where none can match; the sheet is only in the document while
+     * the setting needs it (syncMotionStyle).
+     */
+    const CSS_MOTION = `
 html[data-rdsh-motion="reduced"] *, html[data-rdsh-motion="reduced"] *::before, html[data-rdsh-motion="reduced"] *::after,
 html[data-rdsh-motion="off"] *, html[data-rdsh-motion="off"] *::before, html[data-rdsh-motion="off"] *::after {
   animation-duration: var(--rdsh-anim-duration) !important;
@@ -15273,6 +15808,56 @@ html[data-rdsh-motion="off"] *, html[data-rdsh-motion="off"] *::before, html[dat
   transition-delay: 0s !important;
 }
 html[data-rdsh-motion="off"] * { scroll-behavior: auto !important; }
+html[data-rdsh-motion="off"] [data-sidebar-right-open] [data-dockkit-host],
+html[data-rdsh-motion="off"] [data-dockkit-host],
+html[data-rdsh-motion="off"] [data-rdsh-toast][data-rdsh-toast-dismissed] {
+  transition: none !important;
+  animation: none !important;
+}
+`;
+
+    /** The files-search highlight, present only while a search paints one. */
+    const CSS_FILES_HIGHLIGHT = `
+::highlight(rdsh-files-search) {
+  background-color: var(--dsw-alias-state-business-secondary, rgba(77,107,254,.35));
+  color: inherit;
+}
+`;
+
+    const CSS_PHONE = `
+html[data-rdsh-motion] { --rdsh-anim-duration: .15s; --rdsh-anim-repeat: infinite; }
+html[data-rdsh-motion="reduced"] { --rdsh-anim-duration: .08s; --rdsh-anim-repeat: 1; }
+html[data-rdsh-motion="off"] { --rdsh-anim-duration: .001ms; --rdsh-anim-repeat: 1; }
+/* Off-screen finished turns skip rendering (decorateRenderSkip). The auto
+   size is remembered while the turn renders untagged, so a skipped turn keeps
+   its exact height. */
+html[data-rdsh-device-mode="mobile"] :is([data-chat-flow-kind="user"], [data-chat-flow-kind="turn-process"], [data-chat-flow-kind="assistant-step"]) { contain-intrinsic-block-size: auto 480px; }
+html[data-rdsh-device-mode="mobile"] [data-rdsh-cv] { content-visibility: auto; }
+
+/* Menus and popovers are solid on a phone. Every upstream menu surface (the
+   session row menu, the sidebar's More, pickers, the composer popovers) is a
+   45%-opaque fill under a 40px backdrop blur taken from these variables
+   (the shared menu primitive reads the fill directly, the rest through
+   --dsw-specific-menu).
+   iOS Safari paints such a frosted layer inconsistently when it opens over
+   the drawer or a long-pressed row: rows stayed blank until one was
+   highlighted, which repainted it. Upstream already makes them solid on
+   macOS; the settings panel lost its blurred mask for the same iOS reason.
+   It is also the most expensive layer to composite while a menu is open. */
+html[data-rdsh-device-mode="mobile"] body {
+  --dsw-menu-backdrop-filter: none !important;
+  --dsw-menu-surface-fill: #f8f9fa !important;
+  --dsw-specific-menu: #f8f9fa !important;
+}
+html[data-rdsh-device-mode="mobile"] body[data-ds-dark-theme] {
+  --dsw-menu-surface-fill: #303136 !important;
+  --dsw-specific-menu: #303136 !important;
+}
+/* The account card in Settings blurs on its own, not through the variable. */
+html[data-rdsh-device-mode="mobile"] [data-shortcut-modal="settings"] [class*="_card"] {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
 
 @property --rdsh-question-angle { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
 @keyframes rdsh-question-glow { to { --rdsh-question-angle: 360deg; } }
@@ -15400,7 +15985,7 @@ html[data-rdsh-hide-settings] [data-rdsh-setting-hidden] { display: none !import
    the drawer button for as long as the detail is up; where upstream keeps its
    close button at the far right, the same slot becomes a back button and the
    detail keeps a matching top inset so its first row stays clear. */
-html:has([data-rdsh-route-detail]) .rdsh-mux-fab { display: none !important; }
+html[data-rdsh-route-detail-open] .rdsh-mux-fab { display: none !important; }
 [data-rdsh-route-detail="back"] { padding-top: 56px !important; }
 .rdsh-mux-route-back {
   /* #59: the route back button shares the drawer button's corner, so it has to
@@ -15715,7 +16300,7 @@ html[data-rdsh-anim="outline"] [data-rdsh-open-row][data-rdsh-session-frame]:not
   100% { background-position: 0% 0 }
 }
 @media (prefers-reduced-motion: reduce) {
-  [data-rdsh-header-title][data-rdsh-header-running] {
+  html:not([data-rdsh-motion="standard"]) [data-rdsh-header-title][data-rdsh-header-running] {
     animation: none !important;
     background-image: none;
     -webkit-text-fill-color: currentColor;
@@ -15767,21 +16352,21 @@ html[data-rdsh-anim="outline"] [data-rdsh-open-row][data-rdsh-session-frame]:not
 }
 @keyframes rdsh-typing-blink { 0%, 49% { opacity: 1 } 50%, 100% { opacity: 0 } }
 @media (prefers-reduced-motion: reduce) {
-  [data-rdsh-typing-caret] { animation: none !important; }
+  html:not([data-rdsh-motion="standard"]) [data-rdsh-typing-caret] { animation: none !important; }
 }
 @keyframes rdsh-ring-rotate {
   to { transform: translate(-50%, -50%) rotate(360deg); }
 }
 @media (prefers-reduced-motion: reduce) {
-  html[data-rdsh-anim="outline"] [data-rdsh-ring-row]::before { animation: none !important; }
+  html[data-rdsh-anim="outline"]:not([data-rdsh-motion="standard"]) [data-rdsh-ring-row]::before { animation: none !important; }
 }
 html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::before,
 html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
-  [data-rdsh-running] [data-rdsh-session-title]::before { animation: none; opacity: .4 }
-  [data-rdsh-running] [data-rdsh-session-title]::after { animation: none }
-  html[data-rdsh-anim="breathing"] [data-rdsh-running] [data-rdsh-session-title] { animation: none; color: var(--dsw-alias-label-primary, #f9fafb) }
+  html:not([data-rdsh-motion="standard"]) [data-rdsh-running] [data-rdsh-session-title]::before { animation: none; opacity: .4 }
+  html:not([data-rdsh-motion="standard"]) [data-rdsh-running] [data-rdsh-session-title]::after { animation: none }
+  html[data-rdsh-anim="breathing"]:not([data-rdsh-motion="standard"]) [data-rdsh-running] [data-rdsh-session-title] { animation: none; color: var(--dsw-alias-label-primary, #f9fafb) }
 }
 
   /* The mockup proved 100% is the layout viewport (844) while the native web
@@ -15996,7 +16581,7 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     -webkit-tap-highlight-color: transparent;
   }
   [data-rdsh-sidebar-toggle] * { -webkit-tap-highlight-color: transparent; }
-  html:has([data-rdsh-sidebar-toggle]:is(:hover, :focus)) [role="tooltip"] { display: none !important; }
+  html[data-rdsh-toggle-hint] [role="tooltip"] { display: none !important; }
 
 
   /* The account row in the sidebar footer is replaced by the settings row
@@ -16142,8 +16727,12 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
        down and the card stayed narrow. */
     --dsh-composer-side-clearance: 0px !important;
   }
+  /* Upstream defines the variable on its conversation body and embedded body
+     (class suffixes _body / _embeddedBody); everything else inherits it. A
+     universal descendant rule here was tested by every element of each
+     restyle. */
   [data-slot="conversation.composer"],
-  [data-slot="conversation.composer"] * {
+  [data-slot="conversation.composer"] :is([class*="_body"], [class*="_embeddedBody"]) {
     --dsh-composer-side-clearance: 0px !important;
   }
   [data-slot="conversation"] > *,
@@ -16283,7 +16872,7 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   @keyframes rdsh-activity-spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) {
     /* The running ring already differs by its hollow track; no motion needed. */
-    [data-rdsh-activity-chip][data-rdsh-activity-running] .rdsh-activity-ring { animation: none; }
+    html:not([data-rdsh-motion="standard"]) [data-rdsh-activity-chip][data-rdsh-activity-running] .rdsh-activity-ring { animation: none; }
   }
 
   /* #82: the popover a chip opens names its kind above the list, and the
@@ -16354,8 +16943,8 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
   [data-rdsh-question-frame] > [data-rdsh-question-card] {
     flex: 0 0 auto !important;
     position: relative !important;
-    width: calc(100vw - 32px) !important;
-    max-width: calc(100vw - 32px) !important;
+    width: 100% !important;
+    max-width: 100% !important;
     margin-left: 0 !important; margin-right: 0 !important;
   }
   /* Each option row is a tile: a hairline plus a radius separates the rows
@@ -16373,8 +16962,8 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     animation: rdsh-question-glow 2.8s linear infinite;
   }
   @media (prefers-reduced-motion: reduce) {
-    [data-rdsh-question-card] [data-rdsh-question-tile][aria-checked="true"],
-    [data-rdsh-question-card] [data-rdsh-question-tile][class*="_customRowActive"] { animation: none; }
+    html:not([data-rdsh-motion="standard"]) [data-rdsh-question-card] [data-rdsh-question-tile][aria-checked="true"],
+    html:not([data-rdsh-motion="standard"]) [data-rdsh-question-card] [data-rdsh-question-tile][class*="_customRowActive"] { animation: none; }
   }
   [data-rdsh-question-card] [class*="_options"] { gap: 6px !important; }
   /* A down chevron bubble for a scrollable question body. It follows the
@@ -16579,11 +17168,9 @@ html[data-rdsh-anim="none"] [data-rdsh-running] [data-rdsh-session-title]::after
     outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, #4d6bfe));
     outline-offset: -2px;
   }
-  /* CSS Custom Highlight: painted over the upstream text nodes, no DOM edit. */
-  ::highlight(rdsh-files-search) {
-    background-color: var(--dsw-alias-state-business-secondary, rgba(77,107,254,.35));
-    color: inherit;
-  }
+  /* CSS Custom Highlight: painted over the upstream text nodes, no DOM edit.
+     The ::highlight rule itself lives in CSS_FILES_HIGHLIGHT, added only while
+     a search is painting one. */
   /* Direct children only. [class*="_header"] also matches _headerActions,
      [class*="_footer"] matches _footerActions and [class*="_option"] matches
      _optionCopy / _optionLine / _optionLabel, so plain descendant selectors
@@ -17124,6 +17711,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         // resize only updates the Settings width readout via the media query;
         // it never measures insets, decorates or fits mobile chrome.
         const onLayoutResize = () => {
+          unsettleFit();
           if (!phone()) return;
           // Do not close the attach sheet here: opening it blurs the composer,
           // and the resulting keyboard-close resize would remove it instantly.
@@ -17141,6 +17729,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           scheduleTerminalFit();
         };
         const onResize = () => {
+          unsettleFit();
           if (window.innerWidth !== gestureWidth) {
             gestureWidth = window.innerWidth;
             resetGestures();
@@ -17149,6 +17738,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           onLayoutResize();
         };
         const onOrientation = () => {
+          unsettleFit();
           gestureWidth = window.innerWidth;
           if (!phone()) return;
           resetGestures();
@@ -17209,6 +17799,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             return;
           }
           keyboardRecoveryUntil = 0;
+          unsettleFit();
           // A recovery exists because an event was missed: measure even if the
           // geometry looks unchanged.
           scheduleMeasureSafeArea(true);
@@ -17273,6 +17864,10 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         document.addEventListener("beforeinput", deleteSelectedCommandChip, true);
         document.addEventListener("pointerdown", onFocusPointer, true);
         document.addEventListener("focusin", onFocusInGuard, true);
+        document.addEventListener("pointerover", onToggleHintOver, { capture: true, passive: true });
+        document.addEventListener("pointerout", onToggleHintOut, { capture: true, passive: true });
+        document.addEventListener("focusin", onToggleHintFocus, true);
+        document.addEventListener("focusout", onToggleHintFocus, true);
         if (phone()) {
           const initial = textBoxOf(document.activeElement);
           if (initial !== null) setTimeout(() => { if (document.activeElement === initial) initial.blur(); }, 0);
@@ -17284,6 +17879,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
         const applyWidthBoundary = () => {
           emit({ narrow: narrow() });
           if (!phone()) return;
+          unsettleFit();
           resetGestures();
           scheduleMeasureSafeArea();
           scheduleDecorate();
@@ -17379,6 +17975,11 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
           syncPushSubscription,
           sendTestNotification,
         };
+        globalThis.__RDSH_RESET_RENDER_SKIP__ = () => {
+          resetRenderSkip();
+          lastSlowAt = 0;
+          scheduleDecorate({ fast: false });
+        };
 
         return () => {
           try {
@@ -17403,6 +18004,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             window.visualViewport?.removeEventListener("resize", scheduleFitVisualViewport);
             window.visualViewport?.removeEventListener("scroll", scheduleFitVisualViewport);
             document.documentElement.removeAttribute("data-rdsh-keyboard");
+            document.querySelector("[data-rdsh-kb-room]")?.removeAttribute("data-rdsh-kb-room");
             removeHeightProbe();
             document.removeEventListener("focusout", onKeyboardFocusOut, true);
             document.removeEventListener("visibilitychange", onKeyboardVisibility);
@@ -17416,10 +18018,29 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             }
             clearTimeout(keyboardRecoveryTimer);
             keyboardRecoveryUntil = 0;
+            clearTimeout(slowTimer);
+            slowTimer = 0;
+            lastSlowAt = 0;
             clearTerminalFit();
             resetGestures();
             clearTimeout(rotationTimer);
             clearTimeout(sendSettleTimer);
+            clearTimeout(toastTimer);
+            toastTimer = 0;
+            for (const toast of document.querySelectorAll(".rdsh-mux-toast")) toast.remove();
+            tabFocusPending = false;
+            allowFocusElement = null;
+            if (noticeRoot !== null) {
+              if (typeof noticeRoot.unmount === "function") noticeRoot.unmount();
+              else noticeRoot.render?.(null);
+              noticeRoot = null;
+            }
+            noticeHost?.remove();
+            noticeHost = null;
+            if (audioContext !== null) {
+              void audioContext.close?.().catch?.(() => {});
+              audioContext = null;
+            }
             document.removeEventListener("dragstart", onDragStartCapture, true);
             document.removeEventListener("dragend", onDragEndCapture, true);
             document.removeEventListener("dblclick", onSessionTitleDoubleClick, true);
@@ -17433,6 +18054,12 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             document.removeEventListener("beforeinput", deleteSelectedCommandChip, true);
             document.removeEventListener("pointerdown", onFocusPointer, true);
             document.removeEventListener("focusin", onFocusInGuard, true);
+            document.removeEventListener("pointerover", onToggleHintOver, true);
+            document.removeEventListener("pointerout", onToggleHintOut, true);
+            document.removeEventListener("focusin", onToggleHintFocus, true);
+            document.removeEventListener("focusout", onToggleHintFocus, true);
+            toggleHintHover = false;
+            toggleHintFocus = false;
             // Added at boot alongside the rest; without these two a re-mount
             // leaves the previous closure listening on every pointer move.
             document.removeEventListener("pointermove", onPointerMove, true);
@@ -17457,6 +18084,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             rightPanelFitPending = false;
             style.remove();
             phoneStyle?.remove();
+            clearOnDemandStyles();
             settingsStyle?.remove();
             settingsStyle = null;
             rightPanelWatch?.disconnect();
@@ -17467,6 +18095,7 @@ html[data-rdsh-native-gap][data-rdsh-safe-bottom] #root { padding-bottom: 0 !imp
             settingsArrows = null;
             fab = null;
             backdrop = null;
+            delete globalThis.__RDSH_RESET_RENDER_SKIP__;
             delete globalThis.__RDSH_MOBILE_UX__;
             navigator.serviceWorker?.removeEventListener("message", onWorkerMessage);
           } finally {

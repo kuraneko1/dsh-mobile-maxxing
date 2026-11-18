@@ -233,8 +233,8 @@ test("the question card uses the composer's 16px viewport gutters", () => {
 	);
 	assert.match(
 		CLIENT,
-		/\[data-rdsh-question-frame\] > \[data-rdsh-question-card\] \{[^}]*flex: 0 0 auto !important;[^}]*width: calc\(100vw - 32px\) !important;[^}]*max-width: calc\(100vw - 32px\) !important;[^}]*margin-left: 0 !important; margin-right: 0 !important;/,
-		"the card is not viewport - 32px with zero auto margins",
+		/\[data-rdsh-question-frame\] > \[data-rdsh-question-card\] \{[^}]*flex: 0 0 auto !important;[^}]*width: 100% !important;[^}]*max-width: 100% !important;[^}]*margin-left: 0 !important; margin-right: 0 !important;/,
+		"the card no longer fills the framed gutter with zero auto margins",
 	);
 	assert.match(CLIENT, /\[data-rdsh-question-card\] > \[class\*="_header"\]/, "the direct-child header padding is gone");
 	assert.match(CLIENT, /\[data-rdsh-question-card\] > \[class\*="_footer"\]/, "the direct-child footer padding is gone");
@@ -338,7 +338,12 @@ test("upstream hooks are styled only in the mobile stylesheet", () => {
 		"the drawer header toggle does not follow the reference paint",
 	);
 	assert.match(CLIENT, /\[data-rdsh-sidebar-toggle\] \* \{ -webkit-tap-highlight-color: transparent; \}/, "the toggle children keep the tap flash");
-	assert.match(CLIENT, /html:has\(\[data-rdsh-sidebar-toggle\]:is\(:hover, :focus\)\) \[role="tooltip"\] \{ display: none !important; \}/, "the toggle tooltip is not suppressed");
+	assert.match(CLIENT, /html\[data-rdsh-toggle-hint\] \[role="tooltip"\] \{ display: none !important; \}/, "the toggle tooltip is not suppressed");
+	// Hover/focus on the toggle is tracked in JS: an html:has() anchor made <html>
+	// re-check its whole subtree on every insertion.
+	assert.doesNotMatch(CLIENT, /^\s*html:has\(/m, "an html:has() rule is back");
+	assert.match(CLIENT, /document\.addEventListener\("pointerover", onToggleHintOver/, "toggle hover is not tracked");
+	assert.match(CLIENT, /document\.addEventListener\("focusin", onToggleHintFocus, true\)/, "toggle focus is not tracked");
 });
 
 test("NARROW_QUERY is geometry only and has one definition", () => {
@@ -539,7 +544,7 @@ test("the right panel is only looked for inside its own subtree", () => {
 	// it without a boundary tagged the app frame as the panel, which then hid
 	// the header and the drawer button with no way back on a phone.
 	assert.match(CLIENT, /const RIGHT_PANEL_ROOT = "\[data-sidebar-right-panel\]"/, "no boundary");
-	assert.match(functionHead("visibleCollapseButton", 900), /rect\.width <= 0 \|\| rect\.height <= 0/, "the 0x0 ghost is not skipped");
+	assert.match(functionHead("visibleCollapseButton", 1300), /rect\.width <= 0 \|\| rect\.height <= 0/, "the 0x0 ghost is not skipped");
 	assert.match(CLIENT, /const boundary = collapse\.closest\(RIGHT_PANEL_ROOT\)/, "the walk is not bounded");
 	assert.match(CLIENT, /while \(node !== null && node !== boundary && node !== document\.body\)/, "the walk ignores the boundary");
 	assert.match(functionHead("forgetRightPanel", 700), /querySelectorAll\("\[data-rdsh-rightpanel\]"\)/, "stale panel tags are kept");
@@ -938,4 +943,18 @@ test("the workspace picker reserves its search band before the first placement",
 	}
 	const device = CLIENT.slice(CLIENT.indexOf("const CSS_DEVICE"), CLIENT.indexOf("const CSS_PHONE"));
 	assert.doesNotMatch(device, /data-rdsh-workspace-picking/, "the pre-tag reservation leaked into the device sheet");
+});
+
+test("menus and popovers are solid on a phone (iOS frosted-layer paint bug)", () => {
+	// iOS Safari left a frosted menu's rows blank until one was highlighted.
+	// Every upstream menu surface takes its blur and fill from these variables.
+	const phone = CLIENT.slice(CLIENT.indexOf("const CSS_PHONE ="), CLIENT.indexOf("const CSS = CSS_DEVICE"));
+	assert.match(phone, /html\[data-rdsh-device-mode="mobile"\] body \{[^}]*--dsw-menu-backdrop-filter: none !important;/);
+	for (const variable of ["--dsw-menu-surface-fill", "--dsw-specific-menu"]) {
+		assert.match(phone, new RegExp(`html\\[data-rdsh-device-mode="mobile"\\] body \\{[^}]*${variable}: #[0-9a-f]{6} !important;`), `${variable} is not solid in the light theme`);
+		assert.match(phone, new RegExp(`html\\[data-rdsh-device-mode="mobile"\\] body\\[data-ds-dark-theme\\] \\{[^}]*${variable}: #[0-9a-f]{6} !important;`), `${variable} is not solid in the dark theme`);
+	}
+	// Desktop keeps upstream's frosted menus: the override lives only in the phone sheet.
+	const device = CLIENT.slice(CLIENT.indexOf("const CSS_DEVICE ="), CLIENT.indexOf("const CSS_SETTINGS ="));
+	assert.ok(!device.includes("--dsw-menu-backdrop-filter"));
 });

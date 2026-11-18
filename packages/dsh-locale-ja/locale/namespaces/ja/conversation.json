@@ -250,7 +250,7 @@
   "row.imageSize": "{width}x{height}px、{bytes} バイト",
   "row.imageSizeDownscaled": "{width}x{height}px（{originalWidth}x{originalHeight}px から縮小）、{bytes} バイト",
   "row.input": "入力",
-  "row.inspect": "Inspect",
+  "row.inspect": "確認",
   "row.output": "出力",
   "row.preparing": "ツール呼び出しを準備中",
   "row.running": "実行中",

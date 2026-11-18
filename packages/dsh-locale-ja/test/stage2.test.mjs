@@ -690,3 +690,22 @@ test('work/ is gitignored and is not part of the shipped package files', () => {
 	const tracked = execFileSync('git', ['ls-files', 'packages/dsh-locale-ja/work'], { cwd: path.resolve(packageDir, '..', '..'), encoding: 'utf8' });
 	assert.equal(tracked.trim(), '');
 });
+
+test('P-2 & T-2: apply registers dictionaries before addLanguage(ja), row.inspect is translated, and package.json is exported', () => {
+	const manifest = readJsonFile(path.join(packageDir, 'package.json'));
+	assert.equal(manifest.exports?.['./package.json'], './package.json');
+	assert.equal(dictionaries.conversation['row.inspect'], '確認');
+
+	const order = [];
+	apply({
+		effect(fn) { return fn(); },
+		locale: {
+			getSnapshot: () => ({ locales: [{ id: 'en' }] }),
+			register(ns) { order.push(`register:${ns}`); return () => {}; },
+			addLanguage(lang) { order.push(`addLanguage:${lang.id}`); return () => {}; },
+		},
+	});
+	assert.equal(order[order.length - 1], 'addLanguage:ja', 'all 65 dictionaries must register before addLanguage(ja)');
+	assert.equal(order.length, EXPECTED_NAMESPACES + 1);
+	assert.deepEqual(placeholders('item {0} {_id}'), ['0', '_id']);
+});
