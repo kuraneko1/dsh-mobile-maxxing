@@ -30,6 +30,14 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { copyFor } from "../lib/copy.js";
 import { isPublicPushAddress, securePushRequest } from "./secure-push.js";
+import {
+	SummarySettingsStore,
+	createTurnActivityTracker,
+	listSummaryModels,
+	normalizeSummarySelection,
+	parseSummarySelectionInput,
+	trySummarizeTurnActivity,
+} from "./summary.js";
 
 /** How long a push stays queued when the phone is offline. */
 const PUSH_TTL_SECONDS = 600;
@@ -290,6 +298,9 @@ export const NOTIFY_DEFAULTS = {
 	turnEndBody: "{detail}",
 	questionTitle: "{session}",
 	questionBody: "{question}",
+	summaryProvider: "",
+	summaryModel: "",
+	summaryTimeoutMs: 15000,
 };
 
 /** Merge a profile's notification config over the defaults. */
@@ -297,7 +308,9 @@ export function normalizeNotifyConfig(input) {
 	const source = input !== null && typeof input === "object" && !Array.isArray(input) ? input : {};
 	const output = { ...NOTIFY_DEFAULTS };
 	for (const key of Object.keys(NOTIFY_DEFAULTS)) {
-		if (typeof source[key] === typeof NOTIFY_DEFAULTS[key]) output[key] = source[key];
+		if (typeof source[key] !== typeof NOTIFY_DEFAULTS[key]) continue;
+		if (typeof NOTIFY_DEFAULTS[key] === "number" && !Number.isFinite(source[key])) continue;
+		output[key] = source[key];
 	}
 	return output;
 }
@@ -325,15 +338,19 @@ export function buildTurnEndPayload(sessionId, reason, context = {}) {
 		strings[`notify.turn.${kind}`] ?? strings["notify.turn.other"],
 		{ kind },
 	);
-	const detail = kind === "completed"
-		? strings["notify.turn.detailCompleted"]
-		: fillCopy(strings["notify.turn.detailReason"], { kind });
+	const summary = typeof context.summary === "string" ? context.summary.trim() : "";
+	const detail = summary !== ""
+		? summary
+		: kind === "completed"
+			? strings["notify.turn.detailCompleted"]
+			: fillCopy(strings["notify.turn.detailReason"], { kind });
 	const copy = context.copy ?? NOTIFY_DEFAULTS;
 	const values = {
 		app: copy.appName,
 		session: context.session ?? "",
 		status,
 		detail,
+		summary,
 		reason: kind,
 		header: status,
 		question: "",
@@ -792,6 +809,16 @@ async function readJsonBody(req) {
 	}
 }
 
+async function readStrictJsonBody(req) {
+	try {
+		const text = await readBody(req);
+		if (text.trim() === "") return { ok: false, error: "request body is required" };
+		return { ok: true, value: JSON.parse(text) };
+	} catch {
+		return { ok: false, error: "invalid JSON body" };
+	}
+}
+
 /**
  * Mount notifications: routes for the browser half plus the push fan-out.
  *
@@ -801,6 +828,12 @@ async function readJsonBody(req) {
 export function applyNotify(ctx, config, { transport = securePushRequest } = {}) {
 	const store = new PushStore(join(stateDirectory(), "push.json"));
 	const copy = normalizeNotifyConfig(config);
+	const summaryStore = new SummarySettingsStore(
+		stateDirectory(),
+		normalizeSummarySelection({ provider: copy.summaryProvider, model: copy.summaryModel }),
+	);
+	const turnActivity = createTurnActivityTracker();
+	const resolveLlm = () => ctx.get?.("llm") ?? ctx.llm;
 	/** RPC ids explicitly marked by a browser, consumed by the matching user message. */
 	const mobileSends = new Map();
 	/** The turn now running in a session: `{ fromPhone, origins }`. */
@@ -899,6 +932,7 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 	ctx.inject(["profileContext"], (profileCtx) => {
 		const profile = profileCtx.profileContext ?? profileCtx.get?.("profileContext");
 		if (typeof profile?.name !== "string" || !/^[a-zA-Z0-9._-]+$/.test(profile.name)) return;
+		summaryStore.bindProfile(profile.name);
 		originFile = join(stateDirectory(), `push-origins-${profile.name}.json`);
 		const saved = readJson(originFile, {});
 		const subscriptions = store.subscriptions();
@@ -1025,11 +1059,17 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 				pendingNotices.delete(pending);
 			}
 		}
+		let effectivePayload = payload;
+		const hasUnacknowledged = subscriptions.some((subscription) => !pending?.acked.has(subscription.endpoint));
+		if (hasUnacknowledged && typeof target.resolvePayload === "function") {
+			const resolved = await Promise.resolve().then(() => target.resolvePayload()).catch(() => payload);
+			if (resolved && typeof resolved === "object") effectivePayload = resolved;
+		}
 		results.push(...await Promise.all(subscriptions.map(async (subscription) => {
 			// Only an acknowledged notice suppresses this particular endpoint.
 			if (pending?.acked.has(subscription.endpoint)) return { status: 0, ok: true, skipped: "acknowledged" };
 			try {
-				const result = await sendWebPush(subscription, payload, { keys: store.keys(), subject, transport });
+				const result = await sendWebPush(subscription, effectivePayload, { keys: store.keys(), subject, transport });
 				if (result.gone) store.remove(subscription.endpoint);
 				return { status: result.status, ok: result.ok };
 			} catch (error) {
@@ -1048,9 +1088,11 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 		agentCtx.on("session/event", (session, event) => {
 			if (event?.type === "turn/start") {
 				turnMobile.set(session.id, { fromPhone: false, origins: new Set() });
+				turnActivity.recordEvent(session.id, event);
 				return;
 			}
 			if (event?.type === "user/message") {
+				turnActivity.recordEvent(session.id, event);
 				const id = event.data?.source?.rpcId;
 				const key = typeof id === "string" ? session.id + "\0" + id : "";
 				const marked = mobileSends.get(key);
@@ -1068,19 +1110,48 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 				}
 				return;
 			}
+			if (event?.type === "tool/call" || event?.type === "tool/result" || event?.type === "assistant/message") {
+				turnActivity.recordEvent(session.id, event);
+				return;
+			}
 			if (event?.type !== "turn/end") return;
 			const turn = turnMobile.get(session.id);
 			const fromPhone = turn?.fromPhone === true;
 			const origins = turn?.origins?.size ? [...turn.origins] : [""];
 			turnMobile.delete(session.id);
+			const reason = event.data?.reason;
+			const activity = turnActivity.finishTurn(session.id, reason);
 			if (copy.onlyMobileTurns && !fromPhone) return;
 			// Root sessions only: a subagent finishing is not news.
 			const agent = agents?.get(session.id);
 			if (agent === undefined || !isRootSession(agent.session) || !isRootSession(session)) return;
-			const payload = buildTurnEndPayload(session.id, event.data?.reason, {
-				copy, lang: copy.lang, session: sessionNameOf(ctx, session),
+			const sessionName = sessionNameOf(ctx, session);
+			const basePayload = buildTurnEndPayload(session.id, reason, {
+				copy, lang: copy.lang, session: sessionName,
 			});
-			for (const origin of origins) void fanOut(payload, { origin, awaitAck: true }).catch((error) => {
+			let pendingSummary;
+			const resolvePayload = () => {
+				if (pendingSummary === undefined) {
+					pendingSummary = (async () => {
+						const selection = summaryStore.read();
+						const summary = await trySummarizeTurnActivity({
+							llm: resolveLlm() ?? agentCtx.get?.("llm") ?? agentCtx.llm,
+							selection,
+							activity,
+							lang: copy.lang,
+							sessionName,
+							sessionId: session.id,
+							timeoutMs: copy.summaryTimeoutMs,
+						});
+						if (typeof summary !== "string" || summary.trim() === "") return basePayload;
+						return buildTurnEndPayload(session.id, reason, {
+							copy, lang: copy.lang, session: sessionName, summary,
+						});
+					})();
+				}
+				return pendingSummary;
+			};
+			for (const origin of origins) void fanOut(basePayload, { origin, awaitAck: true, resolvePayload }).catch((error) => {
 				console.error("[dsh-mobile-maxxing] turn-end push failed", error);
 			});
 		});
@@ -1286,6 +1357,7 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 						sessionName: name,
 						copy,
 						subject: store.subject(copy.subject),
+						summarySelection: summaryStore.read(),
 						turnEnd: buildTurnEndPayload(sessionId, { kind: "completed" }, { copy, lang: copy.lang, session: name }),
 						question: buildQuestionPayload({
 							agent: { id: sessionId },
@@ -1295,6 +1367,47 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 							}],
 						}, { copy, lang: copy.lang, session: name }),
 					});
+				},
+			},
+			{
+				kind: "exact",
+				path: "/api/dsh-mobile-maxxing/push/summary-model",
+				handler: async (req, res) => {
+					if (!guard(req, res)) return;
+					if (req.method === "GET") {
+						const { available, providers } = await listSummaryModels(
+							resolveLlm() ?? routeCtx.get?.("llm") ?? routeCtx.llm,
+						);
+						json(res, 200, {
+							ok: true,
+							selection: summaryStore.read(),
+							available,
+							providers,
+						});
+						return;
+					}
+					if (req.method === "POST") {
+						const raw = await readStrictJsonBody(req);
+						if (!raw.ok) {
+							json(res, 400, { ok: false, error: raw.error });
+							return;
+						}
+						noteOrigin(req, raw.value);
+						const parsed = parseSummarySelectionInput(raw.value);
+						if (!parsed.ok) {
+							json(res, 400, { ok: false, error: parsed.error });
+							return;
+						}
+						try {
+							const selection = summaryStore.write(parsed.value);
+							json(res, 200, { ok: true, selection });
+						} catch (error) {
+							json(res, 500, { ok: false, error: String(error?.message ?? error) });
+						}
+						return;
+					}
+					res.writeHead(405, { allow: "GET, POST" });
+					res.end();
 				},
 			},
 			{
