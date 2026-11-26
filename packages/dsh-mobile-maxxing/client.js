@@ -14314,6 +14314,121 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
     // working; every caller does fetch(`${PUSH_API}/…`).
     const PUSH_API = "api/dsh-mobile-maxxing/push";
 
+    function encodeSummaryModelValue(selection) {
+      if (
+        selection
+        && selection.mode === "model"
+        && typeof selection.provider === "string"
+        && selection.provider !== ""
+        && typeof selection.model === "string"
+        && selection.model !== ""
+      ) {
+        return JSON.stringify([selection.provider, selection.model]);
+      }
+      return "";
+    }
+
+    function decodeSummaryModelValue(value) {
+      if (typeof value !== "string" || value === "") return { mode: "off" };
+      try {
+        const parsed = JSON.parse(value);
+        if (
+          Array.isArray(parsed)
+          && parsed.length === 2
+          && typeof parsed[0] === "string"
+          && parsed[0] !== ""
+          && typeof parsed[1] === "string"
+          && parsed[1] !== ""
+        ) {
+          return { mode: "model", provider: parsed[0], model: parsed[1] };
+        }
+      } catch {
+        return { mode: "off" };
+      }
+      return { mode: "off" };
+    }
+
+    function normalizeSummaryModelSelection(selection) {
+      if (
+        selection
+        && typeof selection === "object"
+        && selection.mode === "model"
+        && typeof selection.provider === "string"
+        && selection.provider.trim() !== ""
+        && typeof selection.model === "string"
+        && selection.model.trim() !== ""
+      ) {
+        return {
+          mode: "model",
+          provider: selection.provider.trim(),
+          model: selection.model.trim(),
+        };
+      }
+      return { mode: "off" };
+    }
+
+    function normalizeSummaryModelState(data) {
+      const available = data?.available === true;
+      const selection = normalizeSummaryModelSelection(data?.selection);
+      const rawProviders = Array.isArray(data?.providers) ? data.providers : [];
+      const providers = [];
+      for (const provider of rawProviders) {
+        if (!provider || typeof provider !== "object" || typeof provider.id !== "string" || provider.id === "") continue;
+        const rawModels = Array.isArray(provider.models) ? provider.models : [];
+        const models = [];
+        for (const model of rawModels) {
+          if (!model || typeof model !== "object" || typeof model.id !== "string" || model.id === "") continue;
+          models.push({
+            provider: typeof model.provider === "string" && model.provider !== "" ? model.provider : provider.id,
+            id: model.id,
+            name: typeof model.name === "string" && model.name !== "" ? model.name : model.id,
+          });
+        }
+        if (models.length > 0) {
+          providers.push({
+            id: provider.id,
+            name: typeof provider.name === "string" && provider.name !== "" ? provider.name : provider.id,
+            models,
+          });
+        }
+      }
+      return { available, providers, selection };
+    }
+
+    async function fetchSummaryModelConfig() {
+      const response = await fetch(`${PUSH_API}/summary-model`, { cache: "no-store" });
+      let data = null;
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
+      if (!response.ok || data?.ok !== true) {
+        throw new Error(String(data?.error || `HTTP ${response.status}`));
+      }
+      return normalizeSummaryModelState(data);
+    }
+
+    async function saveSummaryModelConfig(selection) {
+      const response = await fetch(`${PUSH_API}/summary-model`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(selection),
+      });
+      let data = null;
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
+      if (!response.ok || data?.ok !== true) {
+        throw new Error(String(data?.error || `HTTP ${response.status}`));
+      }
+      return data.selection !== undefined
+        ? normalizeSummaryModelSelection(data.selection)
+        : normalizeSummaryModelSelection(selection);
+    }
+
     /**
      * Acknowledge an actually rendered local banner, per push endpoint.
      *
@@ -15190,10 +15305,113 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
       const [busy, setBusy] = useState(false);
       const [sound, setSound] = useState(readSoundPreset);
       const [volume, setVolume] = useState(readSoundVolume);
+      const [summaryState, setSummaryState] = useState({
+        status: "loading",
+        available: true,
+        providers: [],
+        selection: { mode: "off" },
+      });
+      const [summarySaving, setSummarySaving] = useState(false);
+      const [summaryMessage, setSummaryMessage] = useState("");
+      const summaryMounted = React.useRef(true);
 
       useEffect(() => {
         void refreshNotificationStatus();
       }, []);
+
+      useEffect(() => {
+        summaryMounted.current = true;
+        void fetchSummaryModelConfig().then(
+          (loaded) => {
+            if (!summaryMounted.current) return;
+            setSummaryState({ status: "ready", ...loaded });
+          },
+          () => {
+            if (!summaryMounted.current) return;
+            setSummaryState({
+              status: "error",
+              available: false,
+              providers: [],
+              selection: { mode: "off" },
+            });
+          },
+        );
+        return () => {
+          summaryMounted.current = false;
+        };
+      }, []);
+
+      const summaryValue = encodeSummaryModelValue(summaryState.selection);
+      const summarySelectionPresent = summaryState.selection.mode !== "model"
+        || summaryState.providers.some(
+          (provider) => provider.id === summaryState.selection.provider
+            && provider.models.some((model) => model.id === summaryState.selection.model),
+        );
+
+      const onSummaryModelChange = async (event) => {
+        const nextSelection = decodeSummaryModelValue(event.target.value);
+        setSummarySaving(true);
+        setSummaryMessage("");
+        try {
+          const saved = await saveSummaryModelConfig(nextSelection);
+          if (!summaryMounted.current) return;
+          setSummaryState((previous) => ({ ...previous, selection: saved }));
+          setSummaryMessage(saved.mode === "off" ? t("mux.summary.savedOff") : t("mux.summary.saved"));
+        } catch (error) {
+          if (!summaryMounted.current) return;
+          setSummaryMessage(t("mux.summary.saveFailed", { error: String((error && error.message) || error) }));
+        } finally {
+          if (summaryMounted.current) {
+            setSummarySaving(false);
+            scheduleDecorate();
+          }
+        }
+      };
+
+      const summaryOptions = [
+        h("option", { key: "__off__", value: "" }, t("mux.summary.off")),
+      ];
+      if (!summarySelectionPresent) {
+        summaryOptions.push(
+          h(
+            "option",
+            { key: "__missing__", value: summaryValue },
+            t("mux.summary.missingModel", {
+              provider: summaryState.selection.provider,
+              model: summaryState.selection.model,
+            }),
+          ),
+        );
+      }
+      for (const provider of summaryState.providers) {
+        summaryOptions.push(
+          h(
+            "optgroup",
+            { key: provider.id, label: provider.name },
+            provider.models.map((model) => h(
+              "option",
+              {
+                key: `${provider.id}\0${model.id}`,
+                value: encodeSummaryModelValue({ mode: "model", provider: provider.id, model: model.id }),
+              },
+              model.name,
+            )),
+          ),
+        );
+      }
+      const summaryNote = summarySaving
+        ? t("mux.summary.saving")
+        : summaryMessage !== ""
+          ? summaryMessage
+          : summaryState.status === "loading"
+            ? t("mux.summary.loading")
+            : summaryState.status === "error"
+              ? t("mux.summary.loadFailed")
+              : !summaryState.available
+                ? t("mux.summary.unavailable")
+                : summaryState.providers.length === 0
+                  ? t("mux.summary.empty")
+                  : null;
 
       const run = async (action, success) => {
         setBusy(true);
@@ -15270,6 +15488,27 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
           ),
           s.notifications.permission === "denied"
             ? h("p", { className: "rdsh-mux-note" }, t("mux.note.blocked"))
+            : null,
+          h("h4", { className: "rdsh-mux-subtitle" }, t("mux.summary.title")),
+          h("p", { className: "rdsh-mux-note" }, t("mux.summary.desc")),
+          h(
+            "label",
+            { className: "rdsh-mux-slider" },
+            h("span", null, t("mux.summary.label")),
+            h(
+              "select",
+              {
+                className: "rdsh-mux-select",
+                "aria-label": t("mux.summary.title"),
+                value: summaryValue,
+                disabled: summaryState.status === "loading" || summarySaving,
+                onChange: onSummaryModelChange,
+              },
+              ...summaryOptions,
+            ),
+          ),
+          summaryNote !== null
+            ? h("p", { className: "rdsh-mux-note", role: "status" }, summaryNote)
             : null,
           h("h4", { className: "rdsh-mux-subtitle" }, t("mux.sound.title")),
           h("p", { className: "rdsh-mux-note" }, t("mobile.soundScope")),
