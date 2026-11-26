@@ -799,22 +799,25 @@ test("saved model absent from providers renders missingModel fallback option and
 	}
 });
 
-test("available: false, empty providers, and GET failure each show the expected status note", async () => {
-	for (const [label, handler, expectedKey] of [
+test("available: false, empty providers, and GET failure each show the expected status note and disabled state", async () => {
+	for (const [label, handler, expectedKey, expectedDisabled] of [
 		[
 			"unavailable",
 			() => Promise.resolve(makeJsonResponse({ ok: true, available: false, selection: { mode: "off" }, providers: [] })),
 			"mux.summary.unavailable",
+			false,
 		],
 		[
 			"empty",
 			() => Promise.resolve(makeJsonResponse({ ok: true, available: true, selection: { mode: "off" }, providers: [] })),
 			"mux.summary.empty",
+			false,
 		],
 		[
 			"loadFailed",
 			() => Promise.reject(new Error("network down")),
 			"mux.summary.loadFailed",
+			true,
 		],
 	]) {
 		const app = bootMobileSection({
@@ -826,6 +829,11 @@ test("available: false, empty providers, and GET failure each show the expected 
 		});
 		try {
 			await app.reactHarness.flush();
+			assert.equal(
+				app.summarySelect().props.disabled,
+				expectedDisabled,
+				`expected disabled=${expectedDisabled} for ${label}`,
+			);
 			assert.ok(
 				app.statusNotes().includes(COPY.en[expectedKey]),
 				`expected ${expectedKey} status note for ${label}, got ${JSON.stringify(app.statusNotes())}`,

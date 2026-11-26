@@ -15501,7 +15501,7 @@ html[data-rdsh-device-mode="mobile"] .dsh-mobile-maxxing-install-actions { displ
                 className: "rdsh-mux-select",
                 "aria-label": t("mux.summary.title"),
                 value: summaryValue,
-                disabled: summaryState.status === "loading" || summarySaving,
+                disabled: summaryState.status === "loading" || summaryState.status === "error" || summarySaving,
                 onChange: onSummaryModelChange,
               },
               ...summaryOptions,

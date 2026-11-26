@@ -300,7 +300,7 @@ export const NOTIFY_DEFAULTS = {
 	questionBody: "{question}",
 	summaryProvider: "",
 	summaryModel: "",
-	summaryTimeoutMs: 15000,
+	summaryTimeoutMs: 8000,
 };
 
 /** Merge a profile's notification config over the defaults. */
@@ -833,7 +833,8 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 		normalizeSummarySelection({ provider: copy.summaryProvider, model: copy.summaryModel }),
 	);
 	const turnActivity = createTurnActivityTracker();
-	const resolveLlm = () => ctx.get?.("llm") ?? ctx.llm;
+	let summaryEnabled = summaryStore.read().mode === "model";
+	const resolveLlm = () => ctx.get?.("llm");
 	/** RPC ids explicitly marked by a browser, consumed by the matching user message. */
 	const mobileSends = new Map();
 	/** The turn now running in a session: `{ fromPhone, origins }`. */
@@ -933,6 +934,7 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 		const profile = profileCtx.profileContext ?? profileCtx.get?.("profileContext");
 		if (typeof profile?.name !== "string" || !/^[a-zA-Z0-9._-]+$/.test(profile.name)) return;
 		summaryStore.bindProfile(profile.name);
+		summaryEnabled = summaryStore.read().mode === "model";
 		originFile = join(stateDirectory(), `push-origins-${profile.name}.json`);
 		const saved = readJson(originFile, {});
 		const subscriptions = store.subscriptions();
@@ -1088,11 +1090,12 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 		agentCtx.on("session/event", (session, event) => {
 			if (event?.type === "turn/start") {
 				turnMobile.set(session.id, { fromPhone: false, origins: new Set() });
-				turnActivity.recordEvent(session.id, event);
+				summaryEnabled = summaryStore.read().mode === "model";
+				if (summaryEnabled) turnActivity.recordEvent(session.id, event);
+				else turnActivity.clear(session.id);
 				return;
 			}
 			if (event?.type === "user/message") {
-				turnActivity.recordEvent(session.id, event);
 				const id = event.data?.source?.rpcId;
 				const key = typeof id === "string" ? session.id + "\0" + id : "";
 				const marked = mobileSends.get(key);
@@ -1108,10 +1111,15 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 						}
 					}
 				}
+				if (summaryEnabled && (!copy.onlyMobileTurns || turnMobile.get(session.id)?.fromPhone === true)) {
+					turnActivity.recordEvent(session.id, event);
+				}
 				return;
 			}
 			if (event?.type === "tool/call" || event?.type === "tool/result" || event?.type === "assistant/message") {
-				turnActivity.recordEvent(session.id, event);
+				if (summaryEnabled && (!copy.onlyMobileTurns || turnMobile.get(session.id)?.fromPhone === true)) {
+					turnActivity.recordEvent(session.id, event);
+				}
 				return;
 			}
 			if (event?.type !== "turn/end") return;
@@ -1134,8 +1142,9 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 				if (pendingSummary === undefined) {
 					pendingSummary = (async () => {
 						const selection = summaryStore.read();
+						summaryEnabled = selection.mode === "model";
 						const summary = await trySummarizeTurnActivity({
-							llm: resolveLlm() ?? agentCtx.get?.("llm") ?? agentCtx.llm,
+							llm: resolveLlm(),
 							selection,
 							activity,
 							lang: copy.lang,
@@ -1375,9 +1384,7 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 				handler: async (req, res) => {
 					if (!guard(req, res)) return;
 					if (req.method === "GET") {
-						const { available, providers } = await listSummaryModels(
-							resolveLlm() ?? routeCtx.get?.("llm") ?? routeCtx.llm,
-						);
+						const { available, providers } = await listSummaryModels(resolveLlm());
 						json(res, 200, {
 							ok: true,
 							selection: summaryStore.read(),
@@ -1400,6 +1407,7 @@ export function applyNotify(ctx, config, { transport = securePushRequest } = {})
 						}
 						try {
 							const selection = summaryStore.write(parsed.value);
+							summaryEnabled = selection.mode === "model";
 							json(res, 200, { ok: true, selection });
 						} catch (error) {
 							json(res, 500, { ok: false, error: String(error?.message ?? error) });

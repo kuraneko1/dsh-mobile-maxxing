@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { test } from "node:test";
-import { applyNotify, buildTurnEndPayload, PushStore, toBase64Url } from "../notify/host.js";
+import { applyNotify, buildTurnEndPayload, NOTIFY_DEFAULTS, PushStore, toBase64Url } from "../notify/host.js";
 import {
 	buildSummaryPrompt,
 	createTurnActivityTracker,
@@ -125,8 +125,19 @@ function makeHarness({
 			getOrigin: () => ORIGIN,
 		},
 	};
-	const scope = {
-		...services,
+	const makeContextProxy = (base, injectedDeps = []) => {
+		const allowed = new Set(injectedDeps);
+		return new Proxy(base, {
+			get(target, prop, receiver) {
+				if (typeof prop === "string" && prop in services && !(prop in target)) {
+					if (allowed.has(prop)) return services[prop];
+					throw new Error(`cannot get property "${prop}" without inject`);
+				}
+				return Reflect.get(target, prop, receiver);
+			},
+		});
+	};
+	const createScope = (deps) => makeContextProxy({
 		get: (name) => services[name],
 		on(event, handler) {
 			listeners.set(event, handler);
@@ -136,11 +147,12 @@ function makeHarness({
 			const dispose = fn();
 			return typeof dispose === "function" ? dispose : () => {};
 		},
-	};
-	const ctx = {
+	}, deps);
+	const rootScope = createScope([]);
+	const ctx = makeContextProxy({
 		sessionTitle: services.sessionTitle,
 		inject(deps, callback) {
-			return callback(scope);
+			return callback(createScope(Array.isArray(deps) ? deps : []));
 		},
 		get: (name) => services[name],
 		on(event, handler) {
@@ -148,9 +160,9 @@ function makeHarness({
 			return () => {};
 		},
 		effect(fn) {
-			return scope.effect(fn);
+			return rootScope.effect(fn);
 		},
-	};
+	}, []);
 	const delivered = [];
 	const defaultTransport = async (url, options) => {
 		delivered.push({ url: String(url), options });
@@ -357,6 +369,13 @@ test("activity tracker, prompt framing, and output normalizer enforce bounds cle
 		},
 	});
 	tracker.recordEvent("s1", {
+		type: "tool/result",
+		data: {
+			message: { toolCallId: "c-17", isError: true, content: [{ type: "text", text: "EACCES" }] },
+			error: { name: "FsError", reason: "permission denied" },
+		},
+	});
+	tracker.recordEvent("s1", {
 		type: "assistant/message",
 		data: { message: { content: [{ type: "text", text: "EARLY_" + "a".repeat(3800) }] } },
 	});
@@ -370,11 +389,16 @@ test("activity tracker, prompt framing, and output normalizer enforce bounds cle
 	assert.equal(Array.from(activity.userPrompts[0]).length, 600);
 	assert.equal(activity.tools.length, 16);
 	assert.equal(activity.omittedTools, 2);
-	assert.equal(activity.tools[2].isError, true);
-	assert.equal(activity.tools[2].errorText, "file not found");
+	assert.equal(activity.tools[0].callId, "c-2");
+	assert.equal(activity.tools[0].isError, true);
+	assert.equal(activity.tools[0].errorText, "file not found");
+	assert.equal(activity.tools[15].callId, "c-17");
+	assert.equal(activity.tools[15].isError, true);
+	assert.equal(activity.tools[15].errorText, "permission denied");
 	assert.equal(activity.reasonKind, "error");
 	assert.equal(activity.errorMessage, "rate limited");
 	assert.equal(activity.hasContent, true);
+	assert.equal(NOTIFY_DEFAULTS.summaryTimeoutMs, 8000);
 	const totalAssistantChars = activity.assistantTexts.reduce((sum, text) => sum + Array.from(text).length, 0);
 	assert.ok(totalAssistantChars <= 4000);
 	assert.ok(activity.assistantTexts.join("\n").includes("FINAL_ANSWER_TAIL"), "tail output is preserved");
@@ -617,7 +641,7 @@ test("foreground ACK skips LLM summarization completely; partial ACK invokes LLM
 	assert.equal(tablet.decrypt(harness.delivered[0].options.body).body, "Turn finished cleanly.");
 }));
 
-test("mode off skips LLM and sends stock turn-end copy", withHome(async (_home, stateDir) => {
+test("mode off skips LLM, does not parse tool arguments, and sends stock turn-end copy", withHome(async (_home, stateDir) => {
 	const phone = makeDevice("https://web.push.apple.com/mode-off");
 	seedSubscription(stateDir, phone);
 	const llm = makeFakeLlm();
@@ -628,10 +652,65 @@ test("mode off skips LLM and sends stock turn-end copy", withHome(async (_home, 
 	});
 	harness.addSession("s1", { cwd: "/tmp/work" }, "Off Session");
 
-	await triggerMobileTurn(harness, "s1");
+	await callRoute(harness, MOBILE_SEND_ROUTE, {
+		method: "POST",
+		body: { sessionId: "s1", requestId: "req-off", origin: ORIGIN },
+	});
+	const emit = harness.listeners.get("session/event");
+	const session = { id: "s1", header: { cwd: "/tmp/work" }, title: "Off Session" };
+	let toolArgumentsReads = 0;
+	const toolCallData = { callId: "call-off", name: "write_file" };
+	Object.defineProperty(toolCallData, "arguments", {
+		enumerable: true,
+		get() {
+			toolArgumentsReads += 1;
+			return JSON.stringify({ path: "packages/dsh-mobile-maxxing/notify/summary.js" });
+		},
+	});
+	emit(session, { type: "turn/start", data: { turn: 1 } });
+	emit(session, {
+		type: "user/message",
+		data: { source: { kind: "user", rpcId: "req-off" }, content: [{ type: "text", text: "work" }] },
+	});
+	emit(session, { type: "tool/call", data: toolCallData });
+	emit(session, { type: "assistant/message", data: { message: { content: [{ type: "text", text: "done" }] } } });
+	emit(session, { type: "turn/end", data: { turn: 1, reason: { kind: "completed" } } });
 	await new Promise((resolve) => setTimeout(resolve, WAIT_MS));
 
+	assert.equal(toolArgumentsReads, 0, "tool arguments must not be read or parsed when summary mode is off");
 	assert.equal(llm.calls.length, 0);
+	assert.equal(harness.delivered.length, 1);
+	assert.equal(phone.decrypt(harness.delivered[0].options.body).body, copyFor("en")["notify.turn.detailCompleted"]);
+}));
+
+test("strict cordis context throwing on undeclared llm property returns available: false and falls back on turn/end", withHome(async (_home, stateDir) => {
+	const phone = makeDevice("https://web.push.apple.com/cordis-no-llm");
+	seedSubscription(stateDir, phone);
+	const harness = makeHarness({
+		profileName: "cordis-strict",
+		config: { lang: "en", onlyMobileTurns: true },
+		llm: undefined,
+	});
+	harness.addSession("s1", { cwd: "/tmp/work" }, "Strict Cordis Session");
+
+	const getRes = await callRoute(harness, SUMMARY_ROUTE, { method: "GET" });
+	assert.equal(getRes.status, 200);
+	assert.deepEqual(getRes.json, {
+		ok: true,
+		selection: { mode: "off" },
+		available: false,
+		providers: [],
+	});
+
+	const postRes = await callRoute(harness, SUMMARY_ROUTE, {
+		method: "POST",
+		body: { mode: "model", provider: "deepseek", model: "deepseek-chat" },
+	});
+	assert.equal(postRes.status, 200);
+
+	await triggerMobileTurn(harness, "s1", { requestId: "req-cordis" });
+	await new Promise((resolve) => setTimeout(resolve, WAIT_MS));
+
 	assert.equal(harness.delivered.length, 1);
 	assert.equal(phone.decrypt(harness.delivered[0].options.body).body, copyFor("en")["notify.turn.detailCompleted"]);
 }));

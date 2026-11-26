@@ -11,7 +11,7 @@ const MAX_TOOL_DETAIL_CHARS = 120;
 const MAX_ASSISTANT_CHARS = 4000;
 const MAX_ERROR_CHARS = 240;
 const MAX_INPUT_BYTES = 8192;
-const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_TIMEOUT_MS = 8_000;
 const MIN_TIMEOUT_MS = 1_000;
 const MAX_TIMEOUT_MS = 60_000;
 const PREFERRED_ARG_KEYS = ["path", "file_path", "command", "query", "pattern", "url"];
@@ -44,18 +44,6 @@ function cleanInlineText(value, limit) {
 		.replace(/\s+/g, " ")
 		.trim();
 	return limit === undefined ? collapsed : clipCodePoints(collapsed, limit);
-}
-
-export function normalizeSummarySelection(input) {
-	if (!isPlainObject(input)) return { mode: "off" };
-	if (input.mode !== undefined && input.mode !== "model") return { mode: "off" };
-	if (typeof input.provider !== "string" || typeof input.model !== "string") return { mode: "off" };
-	if (CONTROL_CHARS.test(input.provider) || CONTROL_CHARS.test(input.model)) return { mode: "off" };
-	const provider = input.provider.trim();
-	const model = input.model.trim();
-	if (provider.length === 0 || provider.length > MAX_ID_LENGTH) return { mode: "off" };
-	if (model.length === 0 || model.length > MAX_ID_LENGTH) return { mode: "off" };
-	return { mode: "model", provider, model };
 }
 
 export function parseSummarySelectionInput(body) {
@@ -91,6 +79,11 @@ export function parseSummarySelectionInput(body) {
 		return { ok: false, error: `provider and model must not exceed ${MAX_ID_LENGTH} characters` };
 	}
 	return { ok: true, value: { mode: "model", provider: trimmedProvider, model: trimmedModel } };
+}
+
+export function normalizeSummarySelection(input) {
+	const parsed = parseSummarySelectionInput(input);
+	return parsed.ok ? parsed.value : { mode: "off" };
 }
 
 export class SummarySettingsStore {
@@ -269,14 +262,14 @@ export function createTurnActivityTracker() {
 			return;
 		}
 		if (event.type === "tool/call") {
-			if (entry.tools.length >= MAX_TOOL_COUNT) {
-				entry.omittedTools += 1;
-				return;
-			}
 			const callId = typeof event.data?.callId === "string" ? event.data.callId : "";
 			const name = cleanInlineText(event.data?.name, 80) || "tool";
 			const detail = extractToolDetail(event.data?.arguments);
 			entry.tools.push({ callId, name, detail, isError: false, errorText: "" });
+			if (entry.tools.length > MAX_TOOL_COUNT) {
+				entry.tools.shift();
+				entry.omittedTools += 1;
+			}
 			return;
 		}
 		if (event.type === "tool/result") {
@@ -314,7 +307,11 @@ export function createTurnActivityTracker() {
 		return { userPrompts, tools, omittedTools, assistantTexts, reasonKind, errorMessage, hasContent };
 	}
 
-	return { recordEvent, finishTurn };
+	function clear(sessionId) {
+		if (typeof sessionId === "string") sessions.delete(sessionId);
+	}
+
+	return { recordEvent, finishTurn, clear };
 }
 
 function serializeBoundedActivity(activity, sessionName) {
